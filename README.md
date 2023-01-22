@@ -71,13 +71,13 @@ func main() {
         panic(err)
     }
 
-    publisher, err := rabbitmq.NewEventEmitter(conn)
+    publisher, err := rabbitmq.NewPublisherEvent(conn)
     if err != nil {
         panic(err)
     }
 
     for i := 1; i < 10; i++ {
-        emitter.Push(fmt.Sprintf("[%d] - %s", i, os.Args[1]), os.Args[1])
+        publisher.Publish(fmt.Sprintf("[%d] - %s", i, os.Args[1]), os.Args[1])
     }
 }
 ```
