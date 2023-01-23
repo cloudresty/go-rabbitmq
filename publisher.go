@@ -1,60 +1,72 @@
+// Publisher connects to RabbitMQ and publishes messages to a queue
+// using the AMQP protocol.
 package rabbitmq
 
 import (
-	"log"
-
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Publisher connects to RabbitMQ and publishes messages to a queue
+// using the AMQP protocol.
 type Publisher struct {
-	connection *amqp.Connection
+	// Connection settings.
+	Connection ConnectionSettings
 }
 
-func (e *Publisher) setup() error {
-	channel, err := e.connection.Channel()
+// NewPublisher creates a new Publisher.
+func NewPublisher(connection ConnectionSettings) *Publisher {
+	return &Publisher{
+		Connection: connection,
+	}
+}
+
+// Publish publishes a message to RabbitMQ.
+func (p *Publisher) Publish(settings PublisherSettings, message MessageSettings) error {
+
+	// Connect to RabbitMQ.
+	conn, err := amqp.Dial("amqp://" + p.Connection.User + ":" + p.Connection.Password + "@" + p.Connection.Host + ":" + p.Connection.Port + "/" + p.Connection.Vhost)
 	if err != nil {
-		panic(err)
+		return err
+	}
+	defer conn.Close()
+
+	// Open a channel.
+	ch, err := conn.Channel()
+	if err != nil {
+		return err
+	}
+	defer ch.Close()
+
+	// Declare the exchange.
+	err = ch.ExchangeDeclare(
+		settings.Exchange.Name, // name
+		settings.Exchange.Type, // type
+		settings.Exchange.Durable,
+		settings.Exchange.AutoDelete,
+		settings.Exchange.Internal,
+		settings.Exchange.NoWait,
+		nil, // arguments
+	)
+	if err != nil {
+
+		return err
 	}
 
-	defer channel.Close()
-	return declareExchange(channel)
-}
-
-// Publish a specified message to the AMQP exchange
-func (e *Publisher) Publish(event string, severity string) error {
-	channel, err := e.connection.Channel()
+	// Publish the message.
+	err = ch.Publish(
+		settings.Exchange.Name, // exchange
+		"",                     // routing key
+		false,                  // mandatory
+		false,                  // immediate
+		amqp.Publishing{
+			ContentType: message.ContentType,
+			Body:        message.Body,
+		},
+	)
 	if err != nil {
 		return err
 	}
 
-	defer channel.Close()
-
-	err = channel.Publish(
-		getExchangeName(),
-		severity,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(event),
-		},
-	)
-	log.Printf("Sending message: %s -> %s", event, getExchangeName())
 	return nil
-}
-
-// NewPublisherEvent returns a new event.Emitter object
-// ensuring that the object is initialized, without error
-func NewPublisherEvent(conn *amqp.Connection) (Publisher, error) {
-	publisher := Publisher{
-		connection: conn,
-	}
-
-	err := publisher.setup()
-	if err != nil {
-		return Publisher{}, err
-	}
-
-	return publisher, nil
 
 }

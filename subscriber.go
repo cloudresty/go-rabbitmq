@@ -1,79 +1,102 @@
+// Subscriber is a simple example of a subscriber to a RabbitMQ queue.
 package rabbitmq
 
 import (
-	"log"
-
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Subscriber for receiving AMPQ events
 type Subscriber struct {
-	conn      *amqp.Connection
-	queueName string
+	// Connection settings.
+	Connection ConnectionSettings
 }
 
-func (subscriber *Subscriber) setup() error {
-	channel, err := subscriber.conn.Channel()
+// NewSubscriber creates a new Subscriber.
+func NewSubscriber(connection ConnectionSettings) *Subscriber {
+	return &Subscriber{
+		Connection: connection,
+	}
+}
+
+// Subscribe subscribes to a RabbitMQ queue.
+func (s *Subscriber) Subscribe(settings SubscriberSettings, callback func(message MessageSettings)) error {
+
+	// Connect to RabbitMQ.
+	conn, err := amqp.Dial("amqp://" + s.Connection.User + ":" + s.Connection.Password + "@" + s.Connection.Host + ":" + s.Connection.Port + "/" + s.Connection.Vhost)
 	if err != nil {
 		return err
 	}
-	return declareExchange(channel)
-}
+	defer conn.Close()
 
-// NewSubscriber returns a new Subscriber
-func NewConsumer(conn *amqp.Connection) (Subscriber, error) {
-	subscriber := Subscriber{
-		conn: conn,
-	}
-	err := subscriber.setup()
-	if err != nil {
-		return Subscriber{}, err
-	}
-
-	return subscriber, nil
-}
-
-// Listen will listen for all new Queue publications
-// and print them to the console.
-func (subscriber *Subscriber) Listen(topics []string) error {
-	ch, err := subscriber.conn.Channel()
+	// Open a channel.
+	ch, err := conn.Channel()
 	if err != nil {
 		return err
 	}
 	defer ch.Close()
 
-	q, err := declareRandomQueue(ch)
+	// Declare the exchange.
+	err = ch.ExchangeDeclare(
+		settings.Exchange.Name, // name
+		settings.Exchange.Type, // type
+		settings.Exchange.Durable,
+		settings.Exchange.AutoDelete,
+		settings.Exchange.Internal,
+		settings.Exchange.NoWait,
+		nil, // arguments
+	)
 	if err != nil {
 		return err
 	}
 
-	for _, s := range topics {
-		err = ch.QueueBind(
-			q.Name,
-			s,
-			getExchangeName(),
-			false,
-			nil,
-		)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
+	// Declare the queue.
+	q, err := ch.QueueDeclare(
+		settings.Queue.Name,    // name
+		settings.Queue.Durable, // durable
+		settings.Queue.AutoDelete,
+		settings.Queue.Exclusive,
+		settings.Queue.NoWait,
+		nil, // arguments
+	)
 	if err != nil {
 		return err
 	}
 
+	// Bind the queue to the exchange.
+	err = ch.QueueBind(
+		q.Name,                    // queue name
+		settings.Queue.RoutingKey, // routing key
+		settings.Exchange.Name,    // exchange
+		settings.Queue.NoWait,
+		nil, // arguments
+	)
+	if err != nil {
+		return err
+	}
+
+	// Consume messages.
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		true,   // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		return err
+	}
+
+	// Process messages.
 	forever := make(chan bool)
 	go func() {
 		for d := range msgs {
-			log.Printf("Received a message: %s", d.Body)
+			callback(MessageSettings{
+				Body: d.Body,
+			})
 		}
 	}()
-
-	log.Printf("[*] Waiting for message [Exchange, Queue][%s, %s]. To exit press CTRL+C", getExchangeName(), q.Name)
 	<-forever
+
 	return nil
 }

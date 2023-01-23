@@ -1,6 +1,6 @@
 # GoRabbitMQ Package
 
-This is a lightweight Go package for RabbitMQ.
+GoRabbitMQ is a very simple Go package for RabbitMQ.
 
 What you can find on this page:
 
@@ -8,8 +8,9 @@ What you can find on this page:
   - [Package version](#package-version)
   - [Package install](#package-install)
   - [Package import](#package-import)
-- [Publisher Example](#publisher-example)
-- [Subscriber Example](#subscriber-example)
+- [Examples](#examples)
+  - [Publisher Example](#publisher-example)
+  - [Subscriber Example](#subscriber-example)
 
 &nbsp;
 
@@ -19,7 +20,7 @@ What you can find on this page:
 
 ### Package version
 
-Available versions...
+You can check for the latest available version of GoRabbitMQ package by visiting the [tags page](https://github.com/cloudresty/gorabbitmq/tags) through your web browser or through the CLI like shown in the example below.
 
 ```shell
 go list -m -versions github.com/cloudresty/gorabbitmq
@@ -29,17 +30,17 @@ go list -m -versions github.com/cloudresty/gorabbitmq
 
 ### Package install
 
-Package installation...
+The package can be installed via `go get` command.
 
 ```shell
-go get github.com/cloudresty/gorabbitmq@v1.0.0
+go get github.com/cloudresty/gorabbitmq@v0.0.1
 ```
 
 &nbsp;
 
 ### Package import
 
-Package import...
+Like any other Go package this can be easily imported like shown in this example.
 
 ```go
 package main
@@ -51,64 +52,150 @@ import rabbitmq github.com/cloudresty/gorabbitmq
 
 &nbsp;
 
-## Publisher example
+## Examples
+
+Below you'll find two basic examples that demonstrates how to use GoRabbitMQ package, both examples covering the basic functionality for a `Publisher` and also for a `Subscriber`.
+
+&nbsp;
+
+### Publisher example
 
 ```go
 package main
 
 import (
-    "fmt"
-    "os"
+    "encoding/json"
+    "log"
 
     rabbitmq "github.com/cloudresty/gorabbitmq"
-    amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Message structure
+type Message struct {
+    Name string
+    Body string
+    Time int64
+}
+
+// Main function
 func main() {
 
-    conn, err := amqp.Dial("amqp://guest:guest@localhost:5672")
+    // Message content
+    message := Message{"Cloudresty", "Hello", 1294706395881547000}
+
+    // JSON Encode
+    jsonMessage, err := json.Marshal(message)
     if err != nil {
-        panic(err)
+        log.Println(err.Error())
     }
 
-    publisher, err := rabbitmq.NewPublisherEvent(conn)
+    // Publish message
+    err = publishMessage("cloudresty", jsonMessage)
     if err != nil {
-        panic(err)
+        log.Println(err.Error())
     }
 
-    for i := 1; i < 10; i++ {
-        publisher.Publish(fmt.Sprintf("[%d] - %s", i, os.Args[1]), os.Args[1])
+}
+
+// Publish a message to RabbitMQ
+func publishMessage(exchange string, message []byte) error {
+
+    // Create a new Publisher
+    publisher := rabbitmq.NewPublisher(rabbitmq.ConnectionSettings{
+        Host:     "localhost",
+        Port:     "5672",
+        User:     "guest",
+        Password: "guest",
+        Vhost:    "/",
+    })
+
+    // Publish a message
+    err := publisher.Publish(rabbitmq.PublisherSettings{
+        Exchange: rabbitmq.ExchangeSettings{
+            Name:       exchange,
+            Type:       "direct",
+            Durable:    true,
+            AutoDelete: false,
+            Internal:   false,
+            NoWait:     false,
+        },
+    }, rabbitmq.MessageSettings{
+        ContentType: "text/plain",
+        Body:        message,
+    })
+    if err != nil {
+        return err
     }
+
+    return nil
+
 }
 ```
 
 &nbsp;
 
-## Subscriber example
+### Subscriber example
 
 ```go
 package main
 
 import (
-    "os"
+    log
 
     rabbitmq "github.com/cloudresty/gorabbitmq"
-    amqp     "github.com/rabbitmq/amqp091-go"
 )
 
-func main() {
+// Main function
+func main(){
 
-    connection, err := amqp.Dial("amqp://guest:guest@localhost:5672")
+    err := rabbitMQSubscribe("cloudresty", "cloudresty")
     if err != nil {
-        panic(err)
+        log.Println(err.Error())
     }
-    defer connection.Close()
 
-    subscriber, err := rabbitmq.NewSubscriber(connection)
+}
+
+// RabbitMQ Subscribe function
+func rabbitMQSubscribe(exchange, queue string) error {
+
+    // Create a new Subscriber
+    subscriber := rabbitmq.NewSubscriber(rabbitmq.ConnectionSettings{
+        Host:     "localhost",
+        Port:     "5672",
+        User:     "guest",
+        Password: "guest",
+        Vhost:    "/",
+    })
+
+    err := subscriber.Subscribe(rabbitmq.SubscriberSettings{
+        Exchange: rabbitmq.ExchangeSettings{
+            Name:       exchange,
+            Type:       "direct",
+            Durable:    true,
+            AutoDelete: false,
+            Internal:   false,
+            NoWait:     false,
+        },
+        Queue: rabbitmq.QueueSettings{
+            Name:       queue,
+            RoutingKey: queue,
+            Durable:    true,
+            AutoDelete: false,
+            Exclusive:  false,
+            NoWait:     false,
+        },
+        RoutingKey: queue,
+        NoWait:     false,
+    }, func(message rabbitmq.MessageSettings) {
+
+        // Handle message
+        log.Println("Message Received: "+string(message.Body))
+    })
+
     if err != nil {
-        panic(err)
+        return err
     }
-    subscriber.Listen(os.Args[1:])
+
 }
 ```
 

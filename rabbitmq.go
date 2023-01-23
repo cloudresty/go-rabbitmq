@@ -1,32 +1,58 @@
+// RabbitMQ package for Go based on the AMQP library.
 package rabbitmq
 
-import (
-	amqp "github.com/rabbitmq/amqp091-go"
-)
-
-func getExchangeName() string {
-	return "logs_topic"
+// Struct that defines the RabbitMQ AMQP connection settings.
+type ConnectionSettings struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	Vhost    string
 }
 
-func declareRandomQueue(ch *amqp.Channel) (amqp.Queue, error) {
-	return ch.QueueDeclare(
-		"",    // name
-		false, // durable
-		false, // delete when unused
-		true,  // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
+// Struct that defines the RabbitMQ AMQP queue settings.
+type QueueSettings struct {
+	Name       string
+	RoutingKey string
+	Durable    bool
+	AutoDelete bool
+	Exclusive  bool
+	NoWait     bool
 }
 
-func declareExchange(ch *amqp.Channel) error {
-	return ch.ExchangeDeclare(
-		getExchangeName(), // name
-		"topic",           // type
-		true,              // durable
-		false,             // auto-deleted
-		false,             // internal
-		false,             // no-wait
-		nil,               // arguments
-	)
+// Struct that defines the RabbitMQ AMQP exchange settings.
+type ExchangeSettings struct {
+	Name       string
+	Type       string
+	Durable    bool
+	AutoDelete bool
+	Internal   bool
+	NoWait     bool
+}
+
+// Struct that defines the RabbitMQ AMQP binding settings.
+type BindingSettings struct {
+	Queue    QueueSettings
+	Exchange ExchangeSettings
+	Key      string
+	NoWait   bool
+}
+
+// Struct that defines the RabbitMQ AMQP message settings.
+type MessageSettings struct {
+	ContentType string
+	Body        []byte
+}
+
+// Struct that defines the RabbitMQ AMQP publisher settings.
+type PublisherSettings struct {
+	Exchange ExchangeSettings
+}
+
+// Struct that defines the RabbitMQ AMQP subscriber settings.
+type SubscriberSettings struct {
+	Exchange   ExchangeSettings
+	Queue      QueueSettings
+	RoutingKey string
+	NoWait     bool
 }
