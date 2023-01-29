@@ -10,7 +10,7 @@ What you can find on this page:
   - [Package import](#package-import)
 - [Examples](#examples)
   - [Publisher Example](#publisher-example)
-  - [Subscriber Example](#subscriber-example)
+  - [Consumer Example](#consumer-example)
 
 &nbsp;
 
@@ -134,7 +134,7 @@ func publishMessage(exchange string, message []byte) error {
 
 &nbsp;
 
-### Subscriber example
+### Consumer example
 
 ```go
 package main
@@ -190,7 +190,8 @@ func rabbitMQSubscribe(exchange, queue string) error {
 
         // Handle message
         log.Println("Message Received: "+string(message.Body))
-    })
+    },
+    "my-consumer")
 
     if err != nil {
         return err

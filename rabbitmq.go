@@ -49,8 +49,8 @@ type PublisherSettings struct {
 	Exchange ExchangeSettings
 }
 
-// Struct that defines the RabbitMQ AMQP subscriber settings.
-type SubscriberSettings struct {
+// Struct that defines the RabbitMQ AMQP consumer settings.
+type ConsumerSettings struct {
 	Exchange   ExchangeSettings
 	Queue      QueueSettings
 	RoutingKey string

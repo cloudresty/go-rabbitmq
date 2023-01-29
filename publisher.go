@@ -3,6 +3,9 @@
 package rabbitmq
 
 import (
+	"context"
+	"time"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -52,17 +55,24 @@ func (p *Publisher) Publish(settings PublisherSettings, message MessageSettings)
 		return err
 	}
 
+	// Create a context with a timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Publish the message.
-	err = ch.Publish(
+	err = ch.PublishWithContext(ctx,
+
 		settings.Exchange.Name, // exchange
 		"",                     // routing key
 		false,                  // mandatory
 		false,                  // immediate
+
 		amqp.Publishing{
 			ContentType: message.ContentType,
 			Body:        message.Body,
 		},
 	)
+
 	if err != nil {
 		return err
 	}
