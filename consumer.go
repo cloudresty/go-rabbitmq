@@ -109,11 +109,14 @@ func (s *Consumer) Consume(settings ConsumerSettings, callback func(message Mess
 
 		for message := range messages {
 
-			callback(MessageSettings{Body: message.Body})
+			callback(MessageSettings{
+				MessageId: message.MessageId,
+				Body:      message.Body,
+			})
 
 			// Acknowledge the message.
 			if err = message.Ack(false); err != nil {
-				fmt.Printf("Unable to acknowledge the message, err: %s", err.Error())
+				fmt.Printf("Unable to acknowledge the message '"+message.MessageId+"', err: %s", err.Error())
 			}
 
 		}

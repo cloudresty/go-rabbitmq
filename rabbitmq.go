@@ -40,6 +40,7 @@ type BindingSettings struct {
 
 // Struct that defines the RabbitMQ AMQP message settings.
 type MessageSettings struct {
+	MessageId   string
 	ContentType string
 	Body        []byte
 }

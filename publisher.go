@@ -68,6 +68,7 @@ func (p *Publisher) Publish(settings PublisherSettings, message MessageSettings)
 		false,                  // immediate
 
 		amqp.Publishing{
+			MessageId:   message.MessageId,
 			ContentType: message.ContentType,
 			Body:        message.Body,
 		},
