@@ -68,6 +68,7 @@ import (
     "log"
 
     rabbitmq "github.com/cloudresty/gorabbitmq"
+    uuid "github.com/satori/go.uuid"
 )
 
 // Message structure
@@ -100,6 +101,9 @@ func main() {
 // Publish a message to RabbitMQ
 func publishMessage(exchange string, message []byte) error {
 
+    // Message ID
+    messageId := uuid.NewV4().String()
+
     // Create a new Publisher
     publisher := rabbitmq.NewPublisher(rabbitmq.ConnectionSettings{
         Host:     "localhost",
@@ -120,6 +124,7 @@ func publishMessage(exchange string, message []byte) error {
             NoWait:     false,
         },
     }, rabbitmq.MessageSettings{
+        MessageId:   messageId,
         ContentType: "text/plain",
         Body:        message,
     })
@@ -189,7 +194,8 @@ func rabbitMQSubscribe(exchange, queue string) error {
     }, func(message rabbitmq.MessageSettings) {
 
         // Handle message
-        log.Println("Message Received: "+string(message.Body))
+        log.Println("Message ID: "+message.MessageId)
+        log.Println("Message Body: "+string(message.Body))
     },
     "my-consumer")
 
