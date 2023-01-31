@@ -91,10 +91,10 @@ func (s *Consumer) Consume(settings ConsumerSettings, callback func(message Mess
 		queue.Name,     // queue
 		connectionName, // consumer
 		false,          // auto-ack
-		true,           // exclusive
+		false,          // exclusive
 		false,          // no-local
 		false,          // no-wait
-		nil,            // args
+		nil,            // args // amqp.Table{"x-queue-mode": "lazy"},
 
 	)
 

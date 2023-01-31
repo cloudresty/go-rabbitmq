@@ -18,6 +18,7 @@ type QueueSettings struct {
 	AutoDelete bool
 	Exclusive  bool
 	NoWait     bool
+	Type       string
 }
 
 // Struct that defines the RabbitMQ AMQP exchange settings.
