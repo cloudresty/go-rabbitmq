@@ -33,7 +33,7 @@ go list -m -versions github.com/cloudresty/gorabbitmq
 The package can be installed via `go get` command.
 
 ```shell
-go get github.com/cloudresty/gorabbitmq@v0.0.1
+go get github.com/cloudresty/gorabbitmq@v0.0.4
 ```
 
 &nbsp;
