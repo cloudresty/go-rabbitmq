@@ -1,10 +1,10 @@
-# GoRabbitMQ Package
+# Go Rabbitmq Package
 
-GoRabbitMQ is a very simple Go package for RabbitMQ.
+go-rabbitmq is a very simple Go package for RabbitMQ.
 
 What you can find on this page:
 
-- [GoRabbitMQ Setup](#gorabbitmq-setup)
+- [go-rabbitmq Setup](#go-rabbitmq-setup)
   - [Package version](#package-version)
   - [Package install](#package-install)
   - [Package import](#package-import)
@@ -14,16 +14,16 @@ What you can find on this page:
 
 &nbsp;
 
-## GoRabbitMQ Setup
+## Go Rabbitmq Setup
 
 &nbsp;
 
 ### Package version
 
-You can check for the latest available version of GoRabbitMQ package by visiting the [tags page](https://github.com/cloudresty/gorabbitmq/tags) through your web browser or through the CLI like shown in the example below.
+You can check for the latest available version of go-rabbitmq package by visiting the [tags page](https://github.com/cloudresty/go-rabbitmq/tags) through your web browser or through the CLI like shown in the example below.
 
 ```shell
-go list -m -versions github.com/cloudresty/gorabbitmq
+go list -m -versions github.com/cloudresty/go-rabbitmq
 ```
 
 &nbsp;
@@ -33,7 +33,7 @@ go list -m -versions github.com/cloudresty/gorabbitmq
 The package can be installed via `go get` command.
 
 ```shell
-go get github.com/cloudresty/gorabbitmq@v0.0.4
+go get github.com/cloudresty/go-rabbitmq@v0.0.5
 ```
 
 &nbsp;
@@ -45,7 +45,7 @@ Like any other Go package this can be easily imported like shown in this example
 ```go
 package main
 
-import rabbitmq github.com/cloudresty/gorabbitmq
+import rabbitmq github.com/cloudresty/go-rabbitmq
 
 // ...
 ```
@@ -54,7 +54,7 @@ import rabbitmq github.com/cloudresty/gorabbitmq
 
 ## Examples
 
-Below you'll find two basic examples that demonstrates how to use GoRabbitMQ package, both examples covering the basic functionality for a `Publisher` and also for a `Subscriber`.
+Below you'll find two basic examples that demonstrates how to use go-rabbitmq package, both examples covering the basic functionality for a `Publisher` and also for a `Subscriber`.
 
 &nbsp;
 
@@ -67,7 +67,7 @@ import (
     "encoding/json"
     "log"
 
-    rabbitmq "github.com/cloudresty/gorabbitmq"
+    rabbitmq "github.com/cloudresty/go-rabbitmq"
     uuid "github.com/satori/go.uuid"
 )
 
@@ -147,7 +147,7 @@ package main
 import (
     log
 
-    rabbitmq "github.com/cloudresty/gorabbitmq"
+    rabbitmq "github.com/cloudresty/go-rabbitmq"
 )
 
 // Main function

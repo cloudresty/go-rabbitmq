@@ -1,4 +1,4 @@
-module github.com/cloudresty/gorabbitmq
+module github.com/cloudresty/go-rabbitmq
 
 go 1.19
 
