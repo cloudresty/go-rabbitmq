@@ -1,6 +1,8 @@
 // RabbitMQ package for Go based on the AMQP library.
 package rabbitmq
 
+import amqp "github.com/rabbitmq/amqp091-go"
+
 // Struct that defines the RabbitMQ AMQP connection settings.
 type ConnectionSettings struct {
 	Host     string
@@ -19,6 +21,7 @@ type QueueSettings struct {
 	Exclusive  bool
 	NoWait     bool
 	Type       string
+	Args       amqp.Table
 }
 
 // Struct that defines the RabbitMQ AMQP exchange settings.
@@ -29,6 +32,7 @@ type ExchangeSettings struct {
 	AutoDelete bool
 	Internal   bool
 	NoWait     bool
+	Args       amqp.Table
 }
 
 // Struct that defines the RabbitMQ AMQP binding settings.
@@ -49,6 +53,7 @@ type MessageSettings struct {
 // Struct that defines the RabbitMQ AMQP publisher settings.
 type PublisherSettings struct {
 	Exchange ExchangeSettings
+	Queue    QueueSettings
 }
 
 // Struct that defines the RabbitMQ AMQP consumer settings.
@@ -57,4 +62,10 @@ type ConsumerSettings struct {
 	Queue      QueueSettings
 	RoutingKey string
 	NoWait     bool
+	AutoAck    bool
+}
+
+// Struct that defines the RabbitMQ Channel settings.
+type ChannelSettings struct {
+	Channel *amqp.Channel
 }
