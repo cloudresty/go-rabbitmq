@@ -33,7 +33,7 @@ go list -m -versions github.com/cloudresty/go-rabbitmq
 The package can be installed via `go get` command.
 
 ```shell
-go get github.com/cloudresty/go-rabbitmq@v0.0.5
+go get github.com/cloudresty/go-rabbitmq@v0.0.6
 ```
 
 &nbsp;
