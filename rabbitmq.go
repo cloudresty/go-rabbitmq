@@ -24,6 +24,13 @@ type QueueSettings struct {
 	Args       amqp.Table
 }
 
+// QoSSettings defines the RabbitMQ AMQP QoS settings.
+type QoSSettings struct {
+	PrefetchCount int
+	PrefetchSize  int
+	Global        bool
+}
+
 // Struct that defines the RabbitMQ AMQP exchange settings.
 type ExchangeSettings struct {
 	Name       string
@@ -60,6 +67,7 @@ type PublisherSettings struct {
 type ConsumerSettings struct {
 	Exchange   ExchangeSettings
 	Queue      QueueSettings
+	QoS        QoSSettings
 	RoutingKey string
 	NoWait     bool
 	AutoAck    bool

@@ -78,6 +78,15 @@ func (s *Consumer) Consume(settings ConsumerSettings, callback func(message Mess
 		return err
 	}
 
+	// Qos settings.
+	if err = channel.Qos(
+		settings.QoS.PrefetchCount,
+		settings.QoS.PrefetchSize,
+		settings.QoS.Global,
+	); err != nil {
+		return err
+	}
+
 	// Process messages.
 	forever := make(chan bool)
 
