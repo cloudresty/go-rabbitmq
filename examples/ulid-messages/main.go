@@ -76,7 +76,7 @@ func main() {
 	// Create message with auto-generated ULID message ID
 	message := rabbitmq.NewJSONMessage(eventData).
 		WithType("OrderEvent").
-		WithAppId("order-service").
+		WithAppID("order-service").
 		WithHeader("event_type", orderEvent.EventType).
 		WithHeader("order_id", orderEvent.OrderID).
 		WithPriority(5)
@@ -93,7 +93,7 @@ func main() {
 	}
 
 	emit.Info.StructuredFields("Published order event with auto-generated ULID",
-		emit.ZString("message_id", message.MessageId),
+		emit.ZString("message_id", message.MessageID),
 		emit.ZString("order_id", orderEvent.OrderID),
 		emit.ZString("event_type", orderEvent.EventType))
 
@@ -117,10 +117,10 @@ func main() {
 	updateData, _ := json.Marshal(orderUpdateEvent)
 
 	// Create message with custom ULID message ID
-	updateMessage := rabbitmq.NewMessageWithId(updateData, customMessageID).
-		WithCorrelationId(correlationID).
+	updateMessage := rabbitmq.NewMessageWithID(updateData, customMessageID).
+		WithCorrelationID(correlationID).
 		WithType("OrderEvent").
-		WithAppId("payment-service").
+		WithAppID("payment-service").
 		WithHeader("event_type", orderUpdateEvent.EventType).
 		WithHeader("order_id", orderUpdateEvent.OrderID).
 		WithHeader("previous_version", orderUpdateEvent.Version-1).
@@ -138,8 +138,8 @@ func main() {
 	}
 
 	emit.Info.StructuredFields("Published order update with custom ULID",
-		emit.ZString("message_id", updateMessage.MessageId),
-		emit.ZString("correlation_id", updateMessage.CorrelationId),
+		emit.ZString("message_id", updateMessage.MessageID),
+		emit.ZString("correlation_id", updateMessage.CorrelationID),
 		emit.ZString("order_id", orderUpdateEvent.OrderID),
 		emit.ZString("event_type", orderUpdateEvent.EventType))
 
@@ -173,9 +173,9 @@ func main() {
 
 		// All messages in the chain share the same correlation ID
 		chainMessage := rabbitmq.NewJSONMessage(chainData).
-			WithCorrelationId(correlationID). // Same correlation ID
+			WithCorrelationID(correlationID). // Same correlation ID
 			WithType("OrderEvent").
-			WithAppId("fulfillment-service").
+			WithAppID("fulfillment-service").
 			WithHeader("event_type", chainEvent.EventType).
 			WithHeader("order_id", chainEvent.OrderID).
 			WithHeader("chain_position", event.version).
@@ -194,8 +194,8 @@ func main() {
 		}
 
 		emit.Info.StructuredFields("Published chain event",
-			emit.ZString("message_id", chainMessage.MessageId),
-			emit.ZString("correlation_id", chainMessage.CorrelationId),
+			emit.ZString("message_id", chainMessage.MessageID),
+			emit.ZString("correlation_id", chainMessage.CorrelationID),
 			emit.ZString("event_type", chainEvent.EventType),
 			emit.ZInt("version", chainEvent.Version),
 			emit.ZInt("priority", int(event.priority)))

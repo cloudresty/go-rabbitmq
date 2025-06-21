@@ -19,7 +19,7 @@ func main() {
 		msg := rabbitmq.NewMessage(fmt.Appendf(nil, "Test message %d", i+1))
 
 		// Parse the ULID to get its properties
-		parsedUlid, err := ulid.Parse(msg.MessageId)
+		parsedUlid, err := ulid.Parse(msg.MessageID)
 		if err != nil {
 			log.Fatalf("Failed to parse ULID: %v", err)
 		}
@@ -29,7 +29,7 @@ func main() {
 		timestamp := time.Unix(int64(timestampMs/1000), int64(timestampMs%1000)*1000000)
 
 		fmt.Printf("   Message %d: %s (created: %s)\n",
-			i+1, msg.MessageId, timestamp.Format("2006-01-02 15:04:05.000"))
+			i+1, msg.MessageID, timestamp.Format("2006-01-02 15:04:05.000"))
 
 		// Small delay to show different timestamps
 		time.Sleep(1 * time.Millisecond)
@@ -74,7 +74,7 @@ func main() {
 
 	// Using ULID (current implementation)
 	msg1 := rabbitmq.NewMessage([]byte("test"))
-	fmt.Printf("   ULID-based ID: %s (length: %d)\n", msg1.MessageId, len(msg1.MessageId))
+	fmt.Printf("   ULID-based ID: %s (length: %d)\n", msg1.MessageID, len(msg1.MessageID))
 
 	// Show what old timestamp-based IDs would look like
 	timestamp := time.Now().UnixNano()

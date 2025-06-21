@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestPublishAndConsume(t *testing.T) {
 	// Wait for message
 	select {
 	case received := <-messageReceived:
-		if string(received) != string(testMessage) {
+		if !bytes.Equal(received, testMessage) {
 			t.Errorf("Expected %s, got %s", string(testMessage), string(received))
 		}
 	case <-time.After(3 * time.Second):

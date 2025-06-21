@@ -10,6 +10,12 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// ContentType constants
+const (
+	ContentTypeJSON = "application/json"
+	ContentTypeText = "text/plain"
+)
+
 // ExchangeType represents different types of exchanges
 type ExchangeType string
 
@@ -196,8 +202,8 @@ func (q *QueueConfig) ToArguments() map[string]any {
 	return args
 }
 
-// generateMessageId creates a unique message ID using ULID
-func generateMessageId() string {
+// generateMessageID creates a unique message ID using ULID
+func generateMessageID() string {
 	// Generate a new ULID which provides:
 	// - Temporal ordering (time-sortable)
 	// - Global uniqueness
@@ -215,25 +221,48 @@ func generateMessageId() string {
 	return ulidStr
 }
 
+// Message represents a message with metadata
+type Message struct {
+	Body        []byte
+	ContentType string
+	Headers     map[string]any
+	Exchange    string
+	RoutingKey  string
+	Persistent  bool
+	// Message identification and tracing
+	MessageID     string // Unique message identifier (auto-generated if empty)
+	CorrelationID string // Correlation ID for request-response patterns
+	ReplyTo       string // Reply queue for RPC patterns
+	// Message metadata
+	Type   string // Message type/schema identifier
+	AppID  string // Application ID that originated the message
+	UserID string // User ID (if authenticated)
+	// Timing and expiration
+	Timestamp  int64  // Unix timestamp when message was created
+	Expiration string // Message expiration (in milliseconds as string)
+	// Message priority (0-255, higher = more priority)
+	Priority uint8
+}
+
 // NewMessage creates a new Message with auto-generated ID and timestamp
 func NewMessage(body []byte) *Message {
 	return &Message{
 		Body:        body,
-		ContentType: "application/json",
+		ContentType: ContentTypeJSON,
 		Persistent:  true,
-		MessageId:   generateMessageId(),
+		MessageID:   generateMessageID(),
 		Timestamp:   time.Now().Unix(),
 		Headers:     make(map[string]any),
 	}
 }
 
-// NewMessageWithId creates a new Message with a specific ID
-func NewMessageWithId(body []byte, messageId string) *Message {
+// NewMessageWithID creates a new Message with a specific ID
+func NewMessageWithID(body []byte, messageID string) *Message {
 	return &Message{
 		Body:        body,
-		ContentType: "application/json",
+		ContentType: ContentTypeJSON,
 		Persistent:  true,
-		MessageId:   messageId,
+		MessageID:   messageID,
 		Timestamp:   time.Now().Unix(),
 		Headers:     make(map[string]any),
 	}
@@ -242,20 +271,20 @@ func NewMessageWithId(body []byte, messageId string) *Message {
 // NewJSONMessage creates a new Message for JSON content
 func NewJSONMessage(body []byte) *Message {
 	msg := NewMessage(body)
-	msg.ContentType = "application/json"
+	msg.ContentType = ContentTypeJSON
 	return msg
 }
 
 // NewTextMessage creates a new Message for plain text content
 func NewTextMessage(body []byte) *Message {
 	msg := NewMessage(body)
-	msg.ContentType = "text/plain"
+	msg.ContentType = ContentTypeText
 	return msg
 }
 
-// WithCorrelationId sets the correlation ID for request-response patterns
-func (m *Message) WithCorrelationId(correlationId string) *Message {
-	m.CorrelationId = correlationId
+// WithCorrelationID sets the correlation ID for request-response patterns
+func (m *Message) WithCorrelationID(correlationID string) *Message {
+	m.CorrelationID = correlationID
 	return m
 }
 
@@ -271,15 +300,15 @@ func (m *Message) WithType(messageType string) *Message {
 	return m
 }
 
-// WithAppId sets the application ID
-func (m *Message) WithAppId(appId string) *Message {
-	m.AppId = appId
+// WithAppID sets the application ID
+func (m *Message) WithAppID(appID string) *Message {
+	m.AppID = appID
 	return m
 }
 
-// WithUserId sets the user ID (if authenticated)
-func (m *Message) WithUserId(userId string) *Message {
-	m.UserId = userId
+// WithUserID sets the user ID (if authenticated)
+func (m *Message) WithUserID(userID string) *Message {
+	m.UserID = userID
 	return m
 }
 
@@ -331,6 +360,35 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 	channel := conn.Channel()
 
 	// Step 1: Declare main exchanges
+	if err := declareExchanges(channel, exchanges); err != nil {
+		return err
+	}
+
+	// Step 2: Declare dead letter exchanges for queues that need them
+	if err := declareDeadLetterExchanges(channel, queues); err != nil {
+		return err
+	}
+
+	// Step 3: Declare dead letter queues
+	if err := declareDeadLetterQueues(channel, queues); err != nil {
+		return err
+	}
+
+	// Step 4: Declare main queues
+	if err := declareMainQueues(channel, queues); err != nil {
+		return err
+	}
+
+	// Step 5: Create bindings
+	if err := createBindings(channel, bindings); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// declareExchanges declares all the main exchanges
+func declareExchanges(channel *amqp.Channel, exchanges []ExchangeConfig) error {
 	for _, exchange := range exchanges {
 		err := channel.ExchangeDeclare(
 			exchange.Name,
@@ -349,8 +407,11 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 			emit.ZString("exchange_name", exchange.Name),
 			emit.ZString("exchange_type", string(exchange.Type)))
 	}
+	return nil
+}
 
-	// Step 2: Declare dead letter exchanges for queues that need them
+// declareDeadLetterExchanges declares dead letter exchanges for queues that need them
+func declareDeadLetterExchanges(channel *amqp.Channel, queues []QueueConfig) error {
 	dlxMap := make(map[string]bool) // Track created DLXs to avoid duplicates
 	for _, queue := range queues {
 		if queue.AutoCreateDLX {
@@ -379,8 +440,11 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 			}
 		}
 	}
+	return nil
+}
 
-	// Step 3: Declare dead letter queues
+// declareDeadLetterQueues declares dead letter queues
+func declareDeadLetterQueues(channel *amqp.Channel, queues []QueueConfig) error {
 	dlqMap := make(map[string]bool) // Track created DLQs to avoid duplicates
 	for _, queue := range queues {
 		if queue.AutoCreateDLX {
@@ -408,34 +472,45 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 					emit.ZString("queue_type", string(dlqConfig.QueueType)))
 
 				// Bind DLQ to DLX
-				dlxName := queue.GetDLXName()
-				routingKey := queue.Name + queue.DLQSuffix
-				if queue.DeadLetterRoutingKey != "" {
-					routingKey = queue.DeadLetterRoutingKey
+				if err := bindDeadLetterQueue(channel, &queue, dlqName); err != nil {
+					return err
 				}
-
-				err = channel.QueueBind(
-					dlqName,    // queue name
-					routingKey, // routing key
-					dlxName,    // exchange name
-					false,      // no-wait
-					nil,        // arguments
-				)
-				if err != nil {
-					return fmt.Errorf("failed to bind dead letter queue %s to exchange %s: %w", dlqName, dlxName, err)
-				}
-
-				emit.Info.StructuredFields("Dead letter queue bound to exchange",
-					emit.ZString("dlq_name", dlqName),
-					emit.ZString("dlx_name", dlxName),
-					emit.ZString("routing_key", routingKey))
 
 				dlqMap[dlqName] = true
 			}
 		}
 	}
+	return nil
+}
 
-	// Step 4: Declare main queues
+// bindDeadLetterQueue binds a dead letter queue to its exchange
+func bindDeadLetterQueue(channel *amqp.Channel, queue *QueueConfig, dlqName string) error {
+	dlxName := queue.GetDLXName()
+	routingKey := queue.Name + queue.DLQSuffix
+	if queue.DeadLetterRoutingKey != "" {
+		routingKey = queue.DeadLetterRoutingKey
+	}
+
+	err := channel.QueueBind(
+		dlqName,    // queue name
+		routingKey, // routing key
+		dlxName,    // exchange name
+		false,      // no-wait
+		nil,        // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind dead letter queue %s to exchange %s: %w", dlqName, dlxName, err)
+	}
+
+	emit.Info.StructuredFields("Dead letter queue bound to exchange",
+		emit.ZString("dlq_name", dlqName),
+		emit.ZString("dlx_name", dlxName),
+		emit.ZString("routing_key", routingKey))
+	return nil
+}
+
+// declareMainQueues declares all the main queues
+func declareMainQueues(channel *amqp.Channel, queues []QueueConfig) error {
 	for _, queue := range queues {
 		// Convert queue config to arguments (this will include DLX settings)
 		args := queue.ToArguments()
@@ -469,8 +544,11 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 			emit.ZString("queue_type", string(queue.QueueType)),
 			emit.ZString("dlx_name", queue.GetDLXName()))
 	}
+	return nil
+}
 
-	// Create bindings
+// createBindings creates all the queue bindings
+func createBindings(channel *amqp.Channel, bindings []BindingConfig) error {
 	for _, binding := range bindings {
 		err := channel.QueueBind(
 			binding.QueueName,
@@ -484,31 +562,7 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 				binding.QueueName, binding.ExchangeName, err)
 		}
 	}
-
 	return nil
-}
-
-// Message represents a message with metadata
-type Message struct {
-	Body        []byte
-	ContentType string
-	Headers     map[string]any
-	Exchange    string
-	RoutingKey  string
-	Persistent  bool
-	// Message identification and tracing
-	MessageId     string // Unique message identifier (auto-generated if empty)
-	CorrelationId string // Correlation ID for request-response patterns
-	ReplyTo       string // Reply queue for RPC patterns
-	// Message metadata
-	Type   string // Message type/schema identifier
-	AppId  string // Application ID that originated the message
-	UserId string // User ID (if authenticated)
-	// Timing and expiration
-	Timestamp  int64  // Unix timestamp when message was created
-	Expiration string // Message expiration (in milliseconds as string)
-	// Message priority (0-255, higher = more priority)
-	Priority uint8
 }
 
 // ToPublishing converts a Message to amqp.Publishing
@@ -520,13 +574,13 @@ func (m *Message) ToPublishing() amqp.Publishing {
 
 	contentType := m.ContentType
 	if contentType == "" {
-		contentType = "application/json"
+		contentType = ContentTypeJSON
 	}
 
-	// Auto-generate MessageId if not provided
-	messageId := m.MessageId
-	if messageId == "" {
-		messageId = generateMessageId()
+	// Auto-generate MessageID if not provided
+	messageID := m.MessageID
+	if messageID == "" {
+		messageID = generateMessageID()
 	}
 
 	return amqp.Publishing{
@@ -534,12 +588,12 @@ func (m *Message) ToPublishing() amqp.Publishing {
 		Body:          m.Body,
 		DeliveryMode:  deliveryMode,
 		Headers:       m.Headers,
-		MessageId:     messageId,
-		CorrelationId: m.CorrelationId,
+		MessageId:     messageID,
+		CorrelationId: m.CorrelationID,
 		ReplyTo:       m.ReplyTo,
 		Type:          m.Type,
-		AppId:         m.AppId,
-		UserId:        m.UserId,
+		AppId:         m.AppID,
+		UserId:        m.UserID,
 		Timestamp:     time.Unix(m.Timestamp, 0),
 		Expiration:    m.Expiration,
 		Priority:      m.Priority,
@@ -554,12 +608,12 @@ type DeliveryInfo struct {
 	Redelivered  bool
 	DeliveryTag  uint64
 	// Message metadata from AMQP properties
-	MessageId     string
-	CorrelationId string
+	MessageID     string
+	CorrelationID string
 	ReplyTo       string
 	Type          string
-	AppId         string
-	UserId        string
+	AppID         string
+	UserID        string
 	Timestamp     time.Time
 	ContentType   string
 	Priority      uint8
@@ -567,19 +621,19 @@ type DeliveryInfo struct {
 }
 
 // ExtractDeliveryInfo extracts delivery information from an AMQP delivery
-func ExtractDeliveryInfo(delivery amqp.Delivery) DeliveryInfo {
+func ExtractDeliveryInfo(delivery *amqp.Delivery) DeliveryInfo {
 	return DeliveryInfo{
 		MessageCount:  delivery.MessageCount,
 		Exchange:      delivery.Exchange,
 		RoutingKey:    delivery.RoutingKey,
 		Redelivered:   delivery.Redelivered,
 		DeliveryTag:   delivery.DeliveryTag,
-		MessageId:     delivery.MessageId,
-		CorrelationId: delivery.CorrelationId,
+		MessageID:     delivery.MessageId,
+		CorrelationID: delivery.CorrelationId,
 		ReplyTo:       delivery.ReplyTo,
 		Type:          delivery.Type,
-		AppId:         delivery.AppId,
-		UserId:        delivery.UserId,
+		AppID:         delivery.AppId,
+		UserID:        delivery.UserId,
 		Timestamp:     delivery.Timestamp,
 		ContentType:   delivery.ContentType,
 		Priority:      delivery.Priority,

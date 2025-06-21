@@ -146,7 +146,7 @@ func main() {
 		} else {
 			emit.Info.StructuredFields("Message published",
 				emit.ZString("routing_key", msg.routingKey),
-				emit.ZString("message_id", message.MessageId),
+				emit.ZString("message_id", message.MessageID),
 				emit.ZString("description", msg.description))
 		}
 	}

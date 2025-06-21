@@ -57,20 +57,20 @@ jobs:
         git diff --exit-code
 
     - name: Vet
-      run: go vet ./...
+      run: go vet $(go list ./... | grep -v '/examples/')
 
     - name: Run unit tests
-      run: go test -v -race -short ./...
+      run: go test -v -race -short $(go list ./... | grep -v '/examples/')
 
     - name: Wait for RabbitMQ
       run: |
         timeout 60 bash -c 'until nc -z localhost 5672; do sleep 1; done'
 
     - name: Run integration tests
-      run: go test -v -race ./...
+      run: go test -v -race $(go list ./... | grep -v '/examples/')
 
     - name: Run tests with coverage
-      run: go test -v -race -coverprofile=coverage.out ./...
+      run: go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/examples/')
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3

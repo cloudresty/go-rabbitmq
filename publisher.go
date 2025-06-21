@@ -34,12 +34,12 @@ type PublishConfig struct {
 	Headers     map[string]interface{}
 	Persistent  *bool // Optional override for message persistence
 	// Message identification and tracing (for backward compatibility)
-	MessageId     string
-	CorrelationId string
+	MessageID     string
+	CorrelationID string
 	ReplyTo       string
 	Type          string
-	AppId         string
-	UserId        string
+	AppID         string
+	UserID        string
 	Expiration    string
 	Priority      uint8
 }
@@ -239,7 +239,7 @@ func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
 
 	contentType := config.ContentType
 	if contentType == "" {
-		contentType = "application/json"
+		contentType = ContentTypeJSON
 	}
 
 	// Determine message persistence
@@ -254,7 +254,7 @@ func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
 		emit.ZString("content_type", contentType),
 		emit.ZBool("persistent", persistent),
 		emit.ZInt("message_size_bytes", len(config.Message)),
-		emit.ZString("message_id", config.MessageId))
+		emit.ZString("message_id", config.MessageID))
 
 	// Prepare message
 	deliveryMode := uint8(1) // Non-persistent
@@ -262,10 +262,10 @@ func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
 		deliveryMode = uint8(2) // Persistent
 	}
 
-	// Auto-generate MessageId if not provided
-	messageId := config.MessageId
-	if messageId == "" {
-		messageId = generateMessageId()
+	// Auto-generate MessageID if not provided
+	messageID := config.MessageID
+	if messageID == "" {
+		messageID = generateMessageID()
 	}
 
 	msg := amqp.Publishing{
@@ -274,12 +274,12 @@ func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
 		DeliveryMode:  deliveryMode,
 		Timestamp:     time.Now(),
 		Headers:       config.Headers,
-		MessageId:     messageId,
-		CorrelationId: config.CorrelationId,
+		MessageId:     messageID,
+		CorrelationId: config.CorrelationID,
 		ReplyTo:       config.ReplyTo,
 		Type:          config.Type,
-		AppId:         config.AppId,
-		UserId:        config.UserId,
+		AppId:         config.AppID,
+		UserId:        config.UserID,
 		Expiration:    config.Expiration,
 		Priority:      config.Priority,
 	}
@@ -332,9 +332,9 @@ func (p *Publisher) PublishMessage(ctx context.Context, config PublishMessageCon
 	emit.Debug.StructuredFields("Publishing Message object to RabbitMQ",
 		emit.ZString("exchange", exchange),
 		emit.ZString("routing_key", routingKey),
-		emit.ZString("message_id", config.Message.MessageId),
+		emit.ZString("message_id", config.Message.MessageID),
 		emit.ZString("message_type", config.Message.Type),
-		emit.ZString("correlation_id", config.Message.CorrelationId),
+		emit.ZString("correlation_id", config.Message.CorrelationID),
 		emit.ZInt("message_size_bytes", len(config.Message.Body)))
 
 	// Convert Message to amqp.Publishing
@@ -382,16 +382,16 @@ func (p *Publisher) PublishWithConfirmation(ctx context.Context, config PublishC
 			emit.Error.StructuredFields("Message not acknowledged by broker",
 				emit.ZString("exchange", config.Exchange),
 				emit.ZString("routing_key", config.RoutingKey),
-				emit.ZInt64("delivery_tag", int64(confirm.DeliveryTag)))
+				emit.ZString("delivery_tag", fmt.Sprintf("%d", confirm.DeliveryTag)))
 			return fmt.Errorf("message was not acknowledged by broker")
 		}
 		emit.Debug.StructuredFields("Message confirmed by broker",
 			emit.ZString("exchange", config.Exchange),
 			emit.ZString("routing_key", config.RoutingKey),
-			emit.ZInt64("delivery_tag", int64(confirm.DeliveryTag)))
+			emit.ZString("delivery_tag", fmt.Sprintf("%d", confirm.DeliveryTag)))
 		return nil
 	case <-ctx.Done():
-		emit.Warn.StructuredFields("Confirmation cancelled by context",
+		emit.Warn.StructuredFields("Confirmation canceled by context",
 			emit.ZString("exchange", config.Exchange),
 			emit.ZString("routing_key", config.RoutingKey))
 		return ctx.Err()

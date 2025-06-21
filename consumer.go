@@ -296,11 +296,19 @@ func (c *Consumer) Consume(ctx context.Context, config ConsumeConfig) error {
 						emit.ZString("queue", config.Queue),
 						emit.ZString("routing_key", delivery.RoutingKey))
 					if !autoAck {
-						delivery.Nack(false, true) // Reject and requeue
+						if nackErr := delivery.Nack(false, true); nackErr != nil { // Reject and requeue
+							emit.Error.StructuredFields("Failed to nack message",
+								emit.ZString("error", nackErr.Error()),
+								emit.ZString("queue", config.Queue))
+						}
 					}
 				} else {
 					if !autoAck {
-						delivery.Ack(false) // Acknowledge
+						if ackErr := delivery.Ack(false); ackErr != nil { // Acknowledge
+							emit.Error.StructuredFields("Failed to ack message",
+								emit.ZString("error", ackErr.Error()),
+								emit.ZString("queue", config.Queue))
+						}
 					}
 				}
 
@@ -313,7 +321,7 @@ func (c *Consumer) Consume(ctx context.Context, config ConsumeConfig) error {
 				return
 
 			case <-consumeCtx.Done():
-				emit.Info.StructuredFields("Consumer context cancelled",
+				emit.Info.StructuredFields("Consumer context canceled",
 					emit.ZString("queue", config.Queue))
 				return
 			}
@@ -394,7 +402,7 @@ func (c *Consumer) ConsumeWithDeliveryHandler(ctx context.Context, config Consum
 				return
 
 			case <-consumeCtx.Done():
-				emit.Info.StructuredFields("Consumer context cancelled",
+				emit.Info.StructuredFields("Consumer context canceled",
 					emit.ZString("queue", config.Queue))
 				return
 			}
