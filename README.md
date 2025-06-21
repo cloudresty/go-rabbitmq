@@ -63,15 +63,15 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
 ```go
 // Auto-generated ULID message ID
 message := rabbitmq.NewMessage([]byte(`{"order_id": "12345"}`))
-// message.MessageId will be a ULID like: 06bs864k6ss3s12tsqaknhy6y8
+// message.MessageID will be a ULID like: 06bs864k6ss3s12tsqaknhy6y8
 
 // Custom message ID (still ULID format recommended)
 customUlid, _ := ulid.New()
-message := rabbitmq.NewMessageWithId([]byte(`{"data": "value"}`), customUlid)
+message := rabbitmq.NewMessageWithID([]byte(`{"data": "value"}`), customUlid)
 
 // Rich message with ULID correlation
 message := rabbitmq.NewMessage([]byte(`{"event": "payment"}`)).
-    WithCorrelationId("06bs864k6vsf4z56brhryn2kyr"). // ULID correlation ID
+    WithCorrelationID("06bs864k6vsf4z56brhryn2kyr"). // ULID correlation ID
     WithType("payment.processed").
     WithHeader("trace_id", "06bs864k6ss3s12tsqaknhy6y8")
 ```

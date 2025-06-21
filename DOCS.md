@@ -186,7 +186,7 @@ All messages automatically receive ULID-based IDs:
 ```go
 // Auto-generated ULID message ID
 message := rabbitmq.NewMessage([]byte(`{"order_id": "12345"}`))
-// message.MessageId = "06bs864k6ss3s12tsqaknhy6y8"
+// message.MessageID = "06bs864k6ss3s12tsqaknhy6y8"
 
 // Publish with automatic ULID
 err := publisher.PublishMessage(ctx, rabbitmq.PublishMessageConfig{
@@ -207,7 +207,7 @@ if err != nil {
     // Handle error
 }
 
-message := rabbitmq.NewMessageWithId([]byte(`{"data": "value"}`), customUlid)
+message := rabbitmq.NewMessageWithID([]byte(`{"data": "value"}`), customUlid)
 ```
 
 #### Correlation with ULIDs
@@ -223,7 +223,7 @@ parentMessage := rabbitmq.NewMessage([]byte(`{"action": "process_order"}`)).
 // Child messages correlated to parent
 for i, step := range []string{"validate", "reserve", "charge"} {
     childMessage := rabbitmq.NewMessage([]byte(fmt.Sprintf(`{"step": "%s"}`, step))).
-        WithCorrelationId(parentId). // Correlate to parent
+        WithCorrelationID(parentId). // Correlate to parent
         WithType(fmt.Sprintf("order.%s", step)).
         WithHeader("sequence", i+1)
 
@@ -266,7 +266,7 @@ err := publisher.Publish(ctx, rabbitmq.PublishConfig{
     Exchange:      "orders",
     RoutingKey:    "order.legacy",
     Message:       []byte(`{"order_id": "12345"}`),
-    MessageId:     uuid.New().String(), // Legacy UUID
+    MessageID:     uuid.New().String(), // Legacy UUID
     ContentType:   "application/json",
 })
 
@@ -487,7 +487,7 @@ handler := func(ctx context.Context, delivery amqp.Delivery) error {
         delivery.Nack(false, false)
 
         emit.Error.StructuredFields("Message sent to dead letter queue",
-            emit.ZString("message_id", delivery.MessageId),
+            emit.ZString("message_id", delivery.MessageID),
             emit.ZString("error", err.Error()))
 
         return err
