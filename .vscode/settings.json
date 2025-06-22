@@ -6,6 +6,7 @@
         "Crockford",
         "fanout",
         "goleak",
+        "goroutines",
         "NDEKTSV",
         "rabbitmqctl",
         "RRFFQ",

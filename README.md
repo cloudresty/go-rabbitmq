@@ -2,38 +2,41 @@
 
 A reusable Go package for RabbitMQ operations including publishing and consuming messages.
 
+&nbsp;
+
 ## Features
 
-- Simple Publisher for sending messages
-- Flexible Consumer for receiving messages
-- Connection management with retry logic
-- Support for different exchangeThe package includes several comprehensive examples demonstrating different features:
+&nbsp;
 
-- **`examples/publisher/`** - Basic message publishing
-- **`examples/consumer/`** - Basic message consuming
-- **`examples/advanced/`** - Advanced patterns with custom exchanges and queues
-- **`examples/connection-names/`** - Connection naming for better monitoring
-- **`examples/reconnection-test/`** - Auto-reconnection behavior demonstration
-- **`examples/production-queues/`** - Production-ready queue configurations (quorum, HA)
-- **`examples/dead-letter-queues/`** - Automatic dead letter infrastructure setup
-- **`examples/ulid-messages/`** - ULID-based message IDs with correlation patterns
-- **`examples/ulid-verification/`** - ULID format analysis and verification
+### Core Features
 
-Run any example:
+- **Publisher & Consumer**: Simple and reliable message publishing/consuming
+- **Connection Management**: Automatic retry logic and health monitoring
+- **ULID Message IDs**: High-performance, database-optimized identifiers
+- **Structured Logging**: Zero-allocation logging with PII protection
 
-```bash
-go run examples/dead-letter-queues/main.go
-go run examples/ulid-messages/main.go
-go run examples/production-queues/main.go
-go run examples/ulid-verification/main.go
-```
+&nbsp;
 
-## Acknowledgment handling
+### Production Features
 
-- **ULID-based Message IDs** - Universally Unique Lexicographically Sortable Identifiers for optimal database performance
-- **High-performance structured logging** with automatic PII/sensitive data masking
-- Zero-allocation logging using emit library
-- Comprehensive error handling and monitoring
+- **🔄 Auto-Reconnection**: Intelligent retry with configurable backoff
+- **⏱️ Comprehensive Timeouts**: Connection, message processing, and shutdown timeouts
+- **🛡️ Graceful Shutdown**: Signal handling with coordinated resource cleanup
+- **💀 Dead Letter Infrastructure**: Automatic DLX/DLQ setup for failed messages
+- **🏗️ Production-Ready Queues**: Quorum and HA queue configurations
+- **📊 Performance Optimized**: 6x faster ULID generation, zero-allocation logging
+
+&nbsp;
+
+### Advanced Features
+
+- **Multiple Exchange Types**: Direct, Fanout, Topic, and Headers
+- **Flexible Acknowledgment**: Auto-ack, manual ack, and NACK support
+- **Custom Topology**: Exchange, queue, and binding configuration
+- **Context Support**: Full context.Context integration for cancellation
+- **Thread Safety**: Safe for concurrent use across goroutines
+
+&nbsp;
 
 ## ULID Message IDs
 
@@ -49,6 +52,8 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
 - **🔒 Collision Resistant** - 1.21e+24 unique IDs per millisecond
 - **📈 Better Cache Performance** - Time-ordered data improves locality
 
+&nbsp;
+
 ### ULID Format
 
 ```text
@@ -57,6 +62,8 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
   Timestamp      Randomness
    48bits         80bits
 ```
+
+&nbsp;
 
 ### Usage Examples
 
@@ -78,13 +85,19 @@ message := rabbitmq.NewMessage([]byte(`{"event": "payment"}`)).
 
 All message IDs are automatically generated as ULIDs unless explicitly overridden. See `examples/ulid-messages/` and `examples/ulid-verification/` for complete demonstrations.
 
+&nbsp;
+
 ## Installation
 
 ```bash
 go get github.com/cloudresty/go-rabbitmq
 ```
 
+&nbsp;
+
 ## Usage
+
+&nbsp;
 
 ### Publisher
 
@@ -124,6 +137,8 @@ func main() {
     emit.Info.Msg("Message published successfully")
 }
 ```
+
+&nbsp;
 
 ### Consumer
 
@@ -166,6 +181,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 ### Custom Connection Names
 
 You can set custom connection names to identify your applications in the RabbitMQ management console:
@@ -195,6 +212,8 @@ consumer, err := rabbitmq.NewConsumerWithConfig(consumerConfig)
 - Publisher: `go-rabbitmq-publisher`
 - Consumer: `go-rabbitmq-consumer`
 
+&nbsp;
+
 ### Auto-Reconnection
 
 The package includes automatic reconnection functionality to handle network interruptions:
@@ -216,6 +235,8 @@ config := rabbitmq.ConnectionConfig{
 - **Intelligent Retry**: Configurable delay and maximum attempts
 - **Graceful Recovery**: Seamless reconnection without data loss
 - **Production Ready**: Handles network issues, server restarts, etc.
+
+&nbsp;
 
 ### Production-Ready Queues
 
@@ -264,6 +285,8 @@ err := publisher.DeclareQueueWithConfig(config)
 - **Size Limits**: Configure max length and byte limits
 - **TTL Support**: Automatic message expiration
 
+&nbsp;
+
 ### Dead Letter Infrastructure
 
 The package automatically creates dead letter exchanges (DLX) and dead letter queues (DLQ) for production safety:
@@ -291,6 +314,102 @@ config.WithCustomDeadLetter("my-dlx", "failed.routing")
 - **Operational Visibility**: Easy identification of processing failures
 - **Flexible Configuration**: Enable/disable per queue as needed
 
+&nbsp;
+
+### Timeout Configuration
+
+The package provides comprehensive timeout controls for production reliability:
+
+```go
+// Publisher with custom timeouts
+publisherConfig := rabbitmq.PublisherConfig{
+    ConnectionConfig:    rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    ConfirmationTimeout: time.Second * 10, // Wait up to 10s for publish confirmations
+    ShutdownTimeout:     time.Second * 30, // Allow 30s for graceful shutdown
+}
+
+// Consumer with custom timeouts
+consumerConfig := rabbitmq.ConsumerConfig{
+    ConnectionConfig: rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    MessageTimeout:   time.Minute * 5,  // 5-minute limit per message
+    ShutdownTimeout:  time.Second * 30, // 30s for graceful shutdown
+}
+
+// Connection timeouts
+connectionConfig := rabbitmq.ConnectionConfig{
+    URL:            "amqp://localhost:5672",
+    DialTimeout:    time.Second * 30, // TCP connection timeout
+    ChannelTimeout: time.Second * 10, // AMQP channel creation timeout
+}
+```
+
+**Timeout Types:**
+
+- **Connection Timeouts**: Control TCP connection and AMQP channel creation
+- **Message Processing**: Automatic cancellation of long-running message handlers
+- **Publisher Confirmations**: Configurable wait time for delivery confirmations
+- **Graceful Shutdown**: Coordinated shutdown with timeout protection
+
+&nbsp;
+
+### Graceful Shutdown
+
+Production-ready graceful shutdown with coordinated resource cleanup:
+
+```go
+// Basic graceful shutdown with signal handling
+func main() {
+    publisher, _ := rabbitmq.NewPublisher("amqp://localhost:5672")
+    consumer, _ := rabbitmq.NewConsumer("amqp://localhost:5672")
+
+    // Setup signal handling
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+    // Start operations...
+    ctx, cancel := context.WithCancel(context.Background())
+    go consumer.Consume(ctx, config)
+
+    // Wait for shutdown signal
+    <-sigChan
+    emit.Info.Msg("Received shutdown signal")
+
+    // Graceful shutdown
+    cancel()           // Stop consuming new messages
+    publisher.Close()  // Wait for pending publishes
+    consumer.Close()   // Wait for current message processing
+}
+
+// Advanced coordinated shutdown
+func main() {
+    // Create shutdown manager
+    shutdownManager := rabbitmq.NewShutdownManager(
+        rabbitmq.DefaultShutdownConfig())
+
+    // Setup automatic signal handling
+    shutdownManager.SetupSignalHandler()
+
+    // Register components for coordinated shutdown
+    shutdownManager.Register(publisher)
+    shutdownManager.Register(consumer)
+
+    // Start operations...
+
+    // Wait for shutdown (blocks until SIGINT/SIGTERM)
+    shutdownManager.Wait()
+}
+```
+
+**Graceful Shutdown Features:**
+
+- **Signal Handling**: Automatic SIGINT/SIGTERM signal processing
+- **In-Flight Tracking**: Waits for pending operations to complete
+- **Timeout Protection**: Prevents indefinite waiting during shutdown
+- **Component Coordination**: Unified shutdown across multiple components
+- **Zero Data Loss**: Ensures message processing completion before exit
+
+&nbsp;
+
 ## Configuration
 
 The package supports various configuration options for both publishers and consumers:
@@ -300,6 +419,8 @@ The package supports various configuration options for both publishers and consu
 - Message persistence
 - Consumer acknowledgment modes
 - Dead letter exchanges
+
+&nbsp;
 
 ## Examples
 
@@ -311,16 +432,22 @@ The package includes several comprehensive examples demonstrating different feat
 - **`examples/connection-names/`** - Connection naming for better monitoring
 - **`examples/reconnection-test/`** - Auto-reconnection behavior demonstration
 - **`examples/production-queues/`** - Production-ready queue configurations (quorum, HA)
+- **`examples/dead-letter-queues/`** - Automatic dead letter infrastructure setup
 - **`examples/ulid-messages/`** - ULID-based message IDs with correlation patterns
 - **`examples/ulid-verification/`** - ULID format analysis and verification
+- **`examples/timeout-demo/`** - Timeout configuration and behavior demonstration
+- **`examples/graceful-shutdown/`** - Comprehensive graceful shutdown patterns
 
 Run any example:
 
 ```bash
+go run examples/dead-letter-queues/main.go
+go run examples/timeout-demo/main.go
+go run examples/graceful-shutdown/main.go
 go run examples/ulid-messages/main.go
-go run examples/production-queues/main.go
-go run examples/ulid-verification/main.go
 ```
+
+&nbsp;
 
 ## Logging
 
@@ -330,6 +457,8 @@ This package uses the [emit](https://github.com/cloudresty/emit) library for hig
 - **Automatic PII protection**: Sensitive data like connection URLs are automatically sanitized
 - **Structured fields**: All log entries include relevant context for better observability
 - **Performance-first**: Designed for high-throughput production environments
+
+&nbsp;
 
 ### Logging Examples
 
@@ -347,14 +476,62 @@ emit.Info.StructuredFields("Message published successfully",
     emit.ZDuration("duration", time.Since(start)))
 ```
 
+&nbsp;
+
 ## Requirements
 
 - Go 1.24+
 - RabbitMQ server
 
+&nbsp;
+
+## Production Readiness
+
+This package is designed for production use with comprehensive reliability features:
+
+&nbsp;
+
+### ✅ Completed Production Features
+
+- **🔄 Automatic Reconnection**: Intelligent retry with configurable backoff
+- **⏱️ Comprehensive Timeouts**: Connection, message processing, and shutdown timeouts
+- **🛡️ Graceful Shutdown**: Signal handling with coordinated resource cleanup
+- **📊 ULID Message IDs**: High-performance, database-optimized identifiers
+- **💀 Dead Letter Infrastructure**: Automatic DLX/DLQ setup for failed messages
+- **🏗️ Production-Ready Queues**: Quorum and HA queue configurations
+- **📝 Structured Logging**: High-performance logging with PII protection
+- **🧪 Comprehensive Testing**: Full test coverage with CI/CD pipeline
+- **🔧 Code Quality**: Clean linting with Go best practices
+
+&nbsp;
+
+### Production Deployment Checklist
+
+- [x] **Configure appropriate timeouts** - ✅ Connection, message, and shutdown timeouts
+- [x] **Implement graceful shutdown** - ✅ Signal handling and coordinated shutdown
+- [x] **Implement proper logging** - ✅ Structured logging with emit library
+- [ ] Set up monitoring and metrics
+- [ ] Test failover scenarios
+- [ ] Monitor memory usage
+- [ ] Set up alerting for connection failures
+
+&nbsp;
+
+### Performance Characteristics
+
+- **ULID Generation**: ~150ns (6x faster than UUID v4)
+- **Zero-allocation Logging**: Optimized for high-throughput scenarios
+- **Memory Efficient**: Minimal allocations and garbage collection pressure
+- **Connection Pooling**: Single connection per application with channel management
+- **Batch Operations**: Support for high-throughput message processing
+
+&nbsp;
+
 ## Contributing
 
 We welcome contributions to improve this package! Please follow these guidelines:
+
+&nbsp;
 
 ### Getting Started
 
@@ -367,6 +544,8 @@ We welcome contributions to improve this package! Please follow these guidelines
 7. Commit your changes (`git commit -m 'Add amazing feature'`)
 8. Push to the branch (`git push origin feature/amazing-feature`)
 9. Open a Pull Request
+
+&nbsp;
 
 ### Development Setup
 
@@ -388,6 +567,8 @@ make test
 make test-integration
 ```
 
+&nbsp;
+
 ### Code Guidelines
 
 - Follow Go conventions and best practices
@@ -395,6 +576,8 @@ make test-integration
 - Include comprehensive tests for new features
 - Update documentation as needed
 - Maintain backwards compatibility where possible
+
+&nbsp;
 
 ### Reporting Issues
 
@@ -406,9 +589,13 @@ Please use GitHub Issues to report bugs or request features. Include:
 - Steps to reproduce
 - Expected vs actual behavior
 
+&nbsp;
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+
+&nbsp;
 
 ---
 

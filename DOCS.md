@@ -1,10 +1,16 @@
 # Go RabbitMQ Package Documentation
 
+&nbsp;
+
 ## Overview
 
 This package provides a comprehensive, production-ready RabbitMQ client library for Go applications. It offers simplified interfaces for both publishing and consuming messages while maintaining full control over RabbitMQ features.
 
+&nbsp;
+
 ## Features
+
+&nbsp;
 
 ### Core Features
 
@@ -15,6 +21,8 @@ This package provides a comprehensive, production-ready RabbitMQ client library 
 - ✅ **Error Handling**: Comprehensive error types and handling
 - ✅ **Context Support**: Full context.Context integration for cancellation
 
+&nbsp;
+
 ### Advanced Features
 
 - ✅ **Publisher Confirmations**: Reliable message delivery with acknowledgments
@@ -24,13 +32,19 @@ This package provides a comprehensive, production-ready RabbitMQ client library 
 - ✅ **Graceful Shutdown**: Proper resource cleanup and connection closing
 - ✅ **Thread Safety**: Safe for concurrent use
 
+&nbsp;
+
 ## Quick Start
+
+&nbsp;
 
 ### 1. Installation
 
 ```bash
 go get github.com/cloudresty/go-rabbitmq
 ```
+
+&nbsp;
 
 ### 2. Basic Publisher
 
@@ -68,6 +82,8 @@ func main() {
     emit.Info.Msg("Message published successfully")
 }
 ```
+
+&nbsp;
 
 ### 3. Basic Consumer
 
@@ -108,7 +124,11 @@ func main() {
 }
 ```
 
+&nbsp;
+
 ## Architecture
+
+&nbsp;
 
 ### Package Structure
 
@@ -125,6 +145,8 @@ go-rabbitmq/
     └── advanced/     # Advanced topology example
 ```
 
+&nbsp;
+
 ### Key Types
 
 - **`Publisher`**: Handles message publishing
@@ -138,9 +160,13 @@ go-rabbitmq/
 - **`ExchangeConfig`**: Exchange configuration for topology setup
 - **`BindingConfig`**: Queue-to-exchange binding configuration
 
+&nbsp;
+
 ## ULID Message IDs
 
 This package uses [ULID (Universally Unique Lexicographically Sortable Identifier)](https://github.com/cloudresty/ulid) for all message identification, providing significant performance and operational benefits over traditional UUID v4.
+
+&nbsp;
 
 ### Why ULID?
 
@@ -165,6 +191,8 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
 - **No coordination required** - safe in distributed systems
 - **Human readable** - time prefix makes debugging easier
 
+&nbsp;
+
 ### ULID Structure
 
 ```text
@@ -177,7 +205,11 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
 - **Timestamp (48 bits)**: UNIX timestamp in milliseconds, provides time-based sorting
 - **Randomness (80 bits)**: Cryptographically secure random value for uniqueness
 
+&nbsp;
+
 ### Usage Patterns
+
+&nbsp;
 
 #### Auto-Generated Message IDs
 
@@ -196,6 +228,8 @@ err := publisher.PublishMessage(ctx, rabbitmq.PublishMessageConfig{
 })
 ```
 
+&nbsp;
+
 #### Custom ULID Message IDs
 
 For specific use cases requiring custom IDs:
@@ -209,6 +243,8 @@ if err != nil {
 
 message := rabbitmq.NewMessageWithID([]byte(`{"data": "value"}`), customUlid)
 ```
+
+&nbsp;
 
 #### Correlation with ULIDs
 
@@ -231,6 +267,8 @@ for i, step := range []string{"validate", "reserve", "charge"} {
 }
 ```
 
+&nbsp;
+
 #### Time-Range Queries
 
 ULIDs enable efficient time-based queries:
@@ -242,6 +280,8 @@ WHERE message_id >= '06bs7y0000000000000000000000'  -- 1 hour ago
   AND message_id <= '06bs864k6ss3s12tsqaknhy6y8'   -- now
 ORDER BY message_id;  -- Natural chronological order
 ```
+
+&nbsp;
 
 ### ULID vs UUID Comparison
 
@@ -255,6 +295,8 @@ ORDER BY message_id;  -- Natural chronological order
 | **Human Readable** | ✅ Time prefix | ❌ Opaque | ⚠️ MAC exposed |
 | **Privacy** | ✅ Anonymous | ✅ Anonymous | ❌ MAC address |
 | **Collision Risk** | Negligible | Negligible | Negligible |
+
+&nbsp;
 
 ### Migration from UUIDs
 
@@ -280,6 +322,8 @@ err := publisher.PublishMessage(ctx, rabbitmq.PublishMessageConfig{
     Message:    message, // Auto ULID message ID
 })
 ```
+
+&nbsp;
 
 ### ULID Performance Benefits
 
@@ -307,9 +351,13 @@ For complete examples, see:
 - `examples/ulid-messages/main.go` - Comprehensive ULID usage patterns
 - `examples/ulid-verification/main.go` - ULID format verification and analysis
 
+&nbsp;
+
 ## Dead Letter Infrastructure
 
 The package provides automatic dead letter infrastructure creation for production-grade message handling. This critical feature ensures failed messages are preserved for debugging and prevents message loss.
+
+&nbsp;
 
 ### Why Dead Letter Infrastructure?
 
@@ -325,6 +373,8 @@ The package provides automatic dead letter infrastructure creation for productio
 - **Industry Standard**: All production RabbitMQ deployments should have DLX/DLQ
 - **Zero Configuration**: Works out of the box with sensible defaults
 - **Flexible Control**: Enable/disable per queue as needed
+
+&nbsp;
 
 ### Automatic Infrastructure Creation
 
@@ -347,7 +397,11 @@ config := rabbitmq.DefaultQuorumQueueConfig("orders")
 3. **Automatic Binding**: Connects DLX to DLQ
 4. **Main Queue Configuration**: Points to DLX via `x-dead-letter-exchange`
 
+&nbsp;
+
 ### Configuration Options
+
+&nbsp;
 
 #### Default Configuration
 
@@ -371,6 +425,8 @@ classicConfig := rabbitmq.DefaultClassicQueueConfig("logs")
 - DLQ Message TTL: 7 days
 - DLQ Replication: Same as main queue
 
+&nbsp;
+
 #### Custom Dead Letter Configuration
 
 ```go
@@ -387,6 +443,8 @@ config.WithoutDeadLetter()
 config.WithCustomDeadLetter("global-dlx", "failed.orders")
 ```
 
+&nbsp;
+
 #### Advanced Configuration
 
 ```go
@@ -401,6 +459,8 @@ config := rabbitmq.QueueConfig{
     DLQMessageTTL: 30 * 24 * 60 * 60 * 1000, // 30 days
 }
 ```
+
+&nbsp;
 
 ### Message Flow and Routing
 
@@ -426,6 +486,8 @@ Messages are sent to DLX when:
 - Message TTL expires in the queue
 - Queue reaches maximum length
 - Consumer connection drops during processing
+
+&nbsp;
 
 ### Topology Setup with Dead Letter
 
@@ -456,6 +518,8 @@ queues := []rabbitmq.QueueConfig{
 err := rabbitmq.SetupTopology(connection, exchanges, queues, bindings)
 ```
 
+&nbsp;
+
 ### Dead Letter Queue Properties
 
 Dead letter queues inherit production-ready properties:
@@ -472,6 +536,8 @@ Dead letter queues inherit production-ready properties:
 - Configurable message TTL (default: 7 days)
 - Optional size limits
 - No infinite DLX loops (DLQs don't have their own DLX)
+
+&nbsp;
 
 ### Consumer Integration
 
@@ -499,6 +565,8 @@ handler := func(ctx context.Context, delivery amqp.Delivery) error {
 }
 ```
 
+&nbsp;
+
 ### Monitoring and Operations
 
 **RabbitMQ Management Console:**
@@ -522,6 +590,8 @@ if dlqInfo.Messages > 100 {
 // This would typically be done by an operator or admin tool
 ```
 
+&nbsp;
+
 ### Production Considerations
 
 **Capacity Planning:**
@@ -541,6 +611,8 @@ if dlqInfo.Messages > 100 {
 - Republish corrected messages
 - Analyze failure patterns
 - Update processing logic based on DLQ contents
+
+&nbsp;
 
 ### Comparison with Manual Setup
 
@@ -573,7 +645,11 @@ For complete examples, see:
 
 - `examples/dead-letter-queues/main.go` - Comprehensive dead letter infrastructure demo
 
+&nbsp;
+
 ## Configuration
+
+&nbsp;
 
 ### Connection Configuration
 
@@ -586,6 +662,8 @@ config := rabbitmq.ConnectionConfig{
     ConnectionName: "my-service",
 }
 ```
+
+&nbsp;
 
 ### Publisher Configuration
 
@@ -600,6 +678,8 @@ config := rabbitmq.PublisherConfig{
 }
 ```
 
+&nbsp;
+
 ### Consumer Configuration
 
 ```go
@@ -613,9 +693,13 @@ config := rabbitmq.ConsumerConfig{
 }
 ```
 
+&nbsp;
+
 ### Timeout Configuration
 
 The package provides comprehensive timeout controls for production reliability and operational safety.
+
+&nbsp;
 
 #### Connection Timeouts
 
@@ -634,6 +718,8 @@ config := rabbitmq.ConnectionConfig{
 
 - `DialTimeout`: 30 seconds - TCP connection establishment
 - `ChannelTimeout`: 10 seconds - AMQP channel creation
+
+&nbsp;
 
 #### Publisher Timeouts
 
@@ -661,6 +747,8 @@ publisher, err := rabbitmq.NewPublisherWithConfig(rabbitmq.PublisherConfig{
     Persistent:          true,
 })
 ```
+
+&nbsp;
 
 #### Consumer Timeouts
 
@@ -711,6 +799,8 @@ err = consumer.Consume(ctx, rabbitmq.ConsumeConfig{
 })
 ```
 
+&nbsp;
+
 #### Production Timeout Recommendations
 
 **Connection Timeouts:**
@@ -737,6 +827,8 @@ err = consumer.Consume(ctx, rabbitmq.ConsumeConfig{
 - **Development**: 30 seconds (default)
 - **Production**: 1-2 minutes for graceful drain
 - **Critical systems**: 5+ minutes to prevent data loss
+
+&nbsp;
 
 #### Timeout Best Practices
 
@@ -785,6 +877,8 @@ handler := func(ctx context.Context, message []byte) error {
 }
 ```
 
+&nbsp;
+
 #### Timeout Troubleshooting
 
 **Common Issues:**
@@ -807,7 +901,11 @@ rabbitmqctl list_queues name messages_ready messages_unacknowledged
 rabbitmqctl list_consumers queue_name channel ack_required prefetch_count
 ```
 
+&nbsp;
+
 ## Best Practices
+
+&nbsp;
 
 ### 1. Connection Management
 
@@ -815,11 +913,15 @@ rabbitmqctl list_consumers queue_name channel ack_required prefetch_count
 - Implement proper connection health monitoring
 - Handle connection failures gracefully
 
+&nbsp;
+
 ### 2. Publishing
 
 - Always use publisher confirmations for critical messages
 - Set appropriate message persistence based on requirements
 - Use proper content types (e.g., "application/json")
+
+&nbsp;
 
 ### 3. Consuming
 
@@ -827,11 +929,15 @@ rabbitmqctl list_consumers queue_name channel ack_required prefetch_count
 - Implement proper error handling in message handlers
 - Use appropriate prefetch settings for performance
 
+&nbsp;
+
 ### 4. Error Handling
 
 - Check connection status before operations
 - Implement retry logic for transient failures
 - Use context for cancellation and timeouts
+
+&nbsp;
 
 ### 5. Testing
 
@@ -839,7 +945,11 @@ rabbitmqctl list_consumers queue_name channel ack_required prefetch_count
 - Mock connections for unit tests
 - Test error scenarios and edge cases
 
+&nbsp;
+
 ## Development
+
+&nbsp;
 
 ### Running Tests
 
@@ -859,6 +969,8 @@ make run-consumer
 make run-advanced
 ```
 
+&nbsp;
+
 ### Building
 
 ```bash
@@ -873,7 +985,11 @@ make lint
 make ci
 ```
 
+&nbsp;
+
 ## Advanced Usage
+
+&nbsp;
 
 ### Custom Topology Setup
 
@@ -901,6 +1017,8 @@ err := rabbitmq.SetupTopology(conn,
 )
 ```
 
+&nbsp;
+
 ### Publisher with Confirmations
 
 ```go
@@ -914,6 +1032,8 @@ err := publisher.PublishWithConfirmation(ctx, rabbitmq.PublishConfig{
     },
 })
 ```
+
+&nbsp;
 
 ### Advanced Consumer with Raw Deliveries
 
@@ -934,6 +1054,8 @@ err := consumer.ConsumeWithDeliveryHandler(ctx, config,
     })
 ```
 
+&nbsp;
+
 ## Performance Considerations
 
 1. **Connection Pooling**: Use a single connection per application
@@ -941,6 +1063,8 @@ err := consumer.ConsumeWithDeliveryHandler(ctx, config,
 3. **Prefetch Settings**: Tune based on message processing time
 4. **Message Size**: Consider message batching for small messages
 5. **Persistence**: Only use persistent messages when necessary
+
+&nbsp;
 
 ## Production Checklist
 
@@ -952,9 +1076,13 @@ err := consumer.ConsumeWithDeliveryHandler(ctx, config,
 - [ ] Monitor memory usage
 - [ ] Set up alerting for connection failures
 
+&nbsp;
+
 ## Graceful Shutdown
 
 The package provides comprehensive graceful shutdown functionality to ensure clean termination of RabbitMQ operations without data loss or resource leaks.
+
+&nbsp;
 
 ### Why Graceful Shutdown?
 
@@ -972,7 +1100,11 @@ The package provides comprehensive graceful shutdown functionality to ensure cle
 - **Component Coordination**: Unified shutdown across multiple components
 - **Monitoring Integration**: Structured logging of shutdown events
 
+&nbsp;
+
 ### Core Components
+
+&nbsp;
 
 #### 1. Shutdown Manager
 
@@ -994,6 +1126,8 @@ shutdownManager.Register(consumer)
 shutdownManager.Wait()
 ```
 
+&nbsp;
+
 #### 2. In-Flight Operation Tracking
 
 Automatically tracks and waits for ongoing operations:
@@ -1001,6 +1135,8 @@ Automatically tracks and waits for ongoing operations:
 - **Publishers**: Waits for pending publish confirmations
 - **Consumers**: Waits for current message processing to complete
 - **Timeout Protection**: Prevents indefinite waiting
+
+&nbsp;
 
 #### 3. Configurable Timeouts
 
@@ -1013,6 +1149,8 @@ config := rabbitmq.ShutdownConfig{
     GracefulDrainTime: time.Second * 10, // Time for in-flight operations
 }
 ```
+
+&nbsp;
 
 ### Publisher Graceful Shutdown
 
@@ -1035,6 +1173,8 @@ publisher, _ := rabbitmq.NewPublisherWithConfig(publisherConfig)
 - **Timeout Protection**: Forces shutdown if timeout exceeded
 - **New Operation Rejection**: Rejects new publishes during shutdown
 
+&nbsp;
+
 ### Consumer Graceful Shutdown
 
 Consumers include message processing timeout and graceful drain:
@@ -1055,6 +1195,8 @@ consumer, _ := rabbitmq.NewConsumerWithConfig(consumerConfig)
 - **NACK During Shutdown**: Requeues messages received during shutdown
 - **Processing Timeout**: Cancels long-running message handlers
 - **Clean Acknowledgments**: Ensures proper message acknowledgment
+
+&nbsp;
 
 ### Basic Graceful Shutdown
 
@@ -1099,6 +1241,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 ### Advanced Graceful Shutdown
 
 Using the shutdown manager for coordinated shutdown:
@@ -1132,7 +1276,11 @@ func main() {
 }
 ```
 
+&nbsp;
+
 ### Shutdown Configuration
+
+&nbsp;
 
 #### Shutdown Configuration Defaults
 
@@ -1142,6 +1290,8 @@ config := rabbitmq.DefaultShutdownConfig()
 // SignalTimeout: 5 seconds (grace period after signal)
 // GracefulDrainTime: 10 seconds (in-flight operation timeout)
 ```
+
+&nbsp;
 
 #### Custom Configuration
 
@@ -1155,7 +1305,11 @@ config := rabbitmq.ShutdownConfig{
 shutdownManager := rabbitmq.NewShutdownManager(config)
 ```
 
+&nbsp;
+
 ### Production Recommendations
+
+&nbsp;
 
 #### Timeout Settings
 
@@ -1177,6 +1331,8 @@ shutdownManager := rabbitmq.NewShutdownManager(config)
 - Signal Timeout: 1 minute
 - Drain Time: 3-5 minutes
 
+&nbsp;
+
 #### Monitoring Integration
 
 Monitor shutdown events for operational insights:
@@ -1188,6 +1344,8 @@ Monitor shutdown events for operational insights:
 // - "Graceful shutdown completed successfully" - Full shutdown success
 // - "Graceful shutdown timeout exceeded" - Timeout warnings
 ```
+
+&nbsp;
 
 #### Container Integration
 
@@ -1207,7 +1365,11 @@ spec:
     # ... other config
 ```
 
+&nbsp;
+
 ### Graceful Shutdown Best Practices
+
+&nbsp;
 
 #### 1. Always Use Signal Handling
 
@@ -1218,6 +1380,8 @@ shutdownManager.SetupSignalHandler()
 // ❌ Bad - No signal handling
 // Application may be forcefully terminated
 ```
+
+&nbsp;
 
 #### 2. Set Appropriate Timeouts
 
@@ -1233,6 +1397,8 @@ config := rabbitmq.ShutdownConfig{
 }
 ```
 
+&nbsp;
+
 #### 3. Register All Components
 
 ```go
@@ -1245,6 +1411,8 @@ shutdownManager.Register(connection)
 shutdownManager.Register(publisher)
 // Missing consumer registration
 ```
+
+&nbsp;
 
 #### 4. Use Context for Operations
 
@@ -1266,7 +1434,11 @@ func processMessage(ctx context.Context, msg []byte) error {
 }
 ```
 
+&nbsp;
+
 ### Troubleshooting
+
+&nbsp;
 
 #### Common Issues
 
@@ -1287,6 +1459,8 @@ func processMessage(ctx context.Context, msg []byte) error {
 - Verify message acknowledgment before shutdown
 - Check consumer auto-ack settings
 - Ensure proper error handling during shutdown
+
+&nbsp;
 
 #### Diagnostic Commands
 
