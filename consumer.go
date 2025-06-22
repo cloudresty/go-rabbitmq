@@ -250,16 +250,8 @@ func (c *Consumer) Consume(ctx context.Context, config ConsumeConfig) error {
 	consumeCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	// Use defaults if not specified
-	autoAck := c.config.AutoAck
-	if config.AutoAck != nil {
-		autoAck = *config.AutoAck
-	}
-
-	exclusive := c.config.Exclusive
-	if config.Exclusive != nil {
-		exclusive = *config.Exclusive
-	}
+	// Resolve configuration settings
+	autoAck, exclusive := c.resolveConsumeSettings(config)
 
 	// Start consuming
 	deliveries, err := c.conn.Channel().Consume(
@@ -278,59 +270,96 @@ func (c *Consumer) Consume(ctx context.Context, config ConsumeConfig) error {
 	// Handle connection close events
 	closeChan := c.conn.NotifyClose()
 
-	// Process messages
-	go func() {
-		for {
-			select {
-			case delivery, ok := <-deliveries:
-				if !ok {
-					emit.Info.Msg("Consumer delivery channel closed")
-					return
-				}
-
-				// Handle the message
-				err := config.Handler(consumeCtx, delivery.Body)
-				if err != nil {
-					emit.Error.StructuredFields("Error handling message",
-						emit.ZString("error", err.Error()),
-						emit.ZString("queue", config.Queue),
-						emit.ZString("routing_key", delivery.RoutingKey))
-					if !autoAck {
-						if nackErr := delivery.Nack(false, true); nackErr != nil { // Reject and requeue
-							emit.Error.StructuredFields("Failed to nack message",
-								emit.ZString("error", nackErr.Error()),
-								emit.ZString("queue", config.Queue))
-						}
-					}
-				} else {
-					if !autoAck {
-						if ackErr := delivery.Ack(false); ackErr != nil { // Acknowledge
-							emit.Error.StructuredFields("Failed to ack message",
-								emit.ZString("error", ackErr.Error()),
-								emit.ZString("queue", config.Queue))
-						}
-					}
-				}
-
-			case closeErr := <-closeChan:
-				if closeErr != nil {
-					emit.Warn.StructuredFields("Connection closed",
-						emit.ZString("error", closeErr.Error()),
-						emit.ZString("queue", config.Queue))
-				}
-				return
-
-			case <-consumeCtx.Done():
-				emit.Info.StructuredFields("Consumer context canceled",
-					emit.ZString("queue", config.Queue))
-				return
-			}
-		}
-	}()
+	// Process messages in a separate goroutine
+	go c.processMessages(consumeCtx, config, deliveries, closeChan, autoAck)
 
 	// Wait for context cancellation
 	<-consumeCtx.Done()
 	return consumeCtx.Err()
+}
+
+// resolveConsumeSettings resolves configuration overrides for consume operation
+func (c *Consumer) resolveConsumeSettings(config ConsumeConfig) (autoAck bool, exclusive bool) {
+	autoAck = c.config.AutoAck
+	if config.AutoAck != nil {
+		autoAck = *config.AutoAck
+	}
+
+	exclusive = c.config.Exclusive
+	if config.Exclusive != nil {
+		exclusive = *config.Exclusive
+	}
+
+	return autoAck, exclusive
+}
+
+// processMessages handles the message processing loop
+func (c *Consumer) processMessages(ctx context.Context, config ConsumeConfig, deliveries <-chan amqp.Delivery, closeChan <-chan *amqp.Error, autoAck bool) {
+	for {
+		select {
+		case delivery, ok := <-deliveries:
+			if !ok {
+				emit.Info.Msg("Consumer delivery channel closed")
+				return
+			}
+			c.handleDelivery(ctx, config, delivery, autoAck)
+
+		case closeErr := <-closeChan:
+			c.handleConnectionClose(closeErr, config.Queue)
+			return
+
+		case <-ctx.Done():
+			emit.Info.StructuredFields("Consumer context canceled",
+				emit.ZString("queue", config.Queue))
+			return
+		}
+	}
+}
+
+// handleDelivery processes a single message delivery
+func (c *Consumer) handleDelivery(ctx context.Context, config ConsumeConfig, delivery amqp.Delivery, autoAck bool) {
+	err := config.Handler(ctx, delivery.Body)
+	if err != nil {
+		c.handleMessageError(err, config.Queue, delivery.RoutingKey, autoAck, delivery)
+	} else {
+		c.handleMessageSuccess(config.Queue, autoAck, delivery)
+	}
+}
+
+// handleMessageError handles errors during message processing
+func (c *Consumer) handleMessageError(err error, queue, routingKey string, autoAck bool, delivery amqp.Delivery) {
+	emit.Error.StructuredFields("Error handling message",
+		emit.ZString("error", err.Error()),
+		emit.ZString("queue", queue),
+		emit.ZString("routing_key", routingKey))
+
+	if !autoAck {
+		if nackErr := delivery.Nack(false, true); nackErr != nil { // Reject and requeue
+			emit.Error.StructuredFields("Failed to nack message",
+				emit.ZString("error", nackErr.Error()),
+				emit.ZString("queue", queue))
+		}
+	}
+}
+
+// handleMessageSuccess handles successful message processing
+func (c *Consumer) handleMessageSuccess(queue string, autoAck bool, delivery amqp.Delivery) {
+	if !autoAck {
+		if ackErr := delivery.Ack(false); ackErr != nil { // Acknowledge
+			emit.Error.StructuredFields("Failed to ack message",
+				emit.ZString("error", ackErr.Error()),
+				emit.ZString("queue", queue))
+		}
+	}
+}
+
+// handleConnectionClose handles connection close events
+func (c *Consumer) handleConnectionClose(closeErr *amqp.Error, queue string) {
+	if closeErr != nil {
+		emit.Warn.StructuredFields("Connection closed",
+			emit.ZString("error", closeErr.Error()),
+			emit.ZString("queue", queue))
+	}
 }
 
 // ConsumeWithDeliveryHandler starts consuming with a raw delivery handler

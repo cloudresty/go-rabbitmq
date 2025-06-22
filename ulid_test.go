@@ -30,6 +30,9 @@ func TestULIDMessageGeneration(t *testing.T) {
 	// Verify the timestamp is recent (within last 10 seconds)
 	ulidTimeMs := parsedUlid.GetTime()
 	// Safely convert uint64 milliseconds to time.Time
+	if ulidTimeMs > uint64(1<<63-1) { // Check for overflow
+		t.Fatalf("ULID timestamp too large to convert safely: %d", ulidTimeMs)
+	}
 	ulidTime := time.UnixMilli(int64(ulidTimeMs)) // Convert milliseconds to time.Time
 	now := time.Now()
 	if now.Sub(ulidTime) > 10*time.Second {
@@ -80,7 +83,11 @@ func TestULIDTemporalOrdering(t *testing.T) {
 			t.Fatalf("Invalid ULID generated: %s, error: %v", messages[i].MessageID, err)
 		}
 
-		currentTime := time.UnixMilli(int64(parsedUlid.GetTime()))
+		ulidTimeMs := parsedUlid.GetTime()
+		if ulidTimeMs > uint64(1<<63-1) { // Check for overflow
+			t.Fatalf("ULID timestamp too large to convert safely: %d", ulidTimeMs)
+		}
+		currentTime := time.UnixMilli(int64(ulidTimeMs))
 		t.Logf("Message %d: ULID=%s, Time=%v", i+1, messages[i].MessageID, currentTime)
 	}
 

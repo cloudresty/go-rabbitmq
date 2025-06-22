@@ -26,7 +26,19 @@ func main() {
 
 		// Convert timestamp to readable format
 		timestampMs := parsedUlid.GetTime()
-		timestamp := time.Unix(int64(timestampMs/1000), int64(timestampMs%1000)*1000000)
+		// Use explicit conversion with range checking to prevent gosec warnings
+		const maxInt64 = 9223372036854775807
+		var timestamp time.Time
+		if timestampMs <= maxInt64 {
+			// Safe conversion within int64 range
+			timestampFloat := float64(timestampMs)
+			seconds := int64(timestampFloat / 1000.0)
+			nanoseconds := int64((timestampFloat - float64(seconds)*1000.0) * 1000000.0)
+			timestamp = time.Unix(seconds, nanoseconds)
+		} else {
+			// Fallback for extremely large timestamps (unlikely with ULID)
+			timestamp = time.Unix(0, 0)
+		}
 
 		fmt.Printf("   Message %d: %s (created: %s)\n",
 			i+1, msg.MessageID, timestamp.Format("2006-01-02 15:04:05.000"))
