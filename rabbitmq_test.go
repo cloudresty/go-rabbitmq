@@ -79,6 +79,9 @@ func TestPublishAndConsume(t *testing.T) {
 		t.Skipf("Could not create publisher: %v", err)
 	}
 	defer func() {
+		// Add a small delay to let any in-flight logging complete
+		// This helps avoid race conditions in the emit library's timestamp code
+		time.Sleep(10 * time.Millisecond)
 		_ = publisher.Close() // Ignore error during cleanup
 	}()
 
@@ -88,6 +91,9 @@ func TestPublishAndConsume(t *testing.T) {
 		t.Skipf("Could not create consumer: %v", err)
 	}
 	defer func() {
+		// Add a small delay to let any in-flight logging complete
+		// This helps avoid race conditions in the emit library's timestamp code
+		time.Sleep(10 * time.Millisecond)
 		_ = consumer.Close() // Ignore error during cleanup
 	}()
 

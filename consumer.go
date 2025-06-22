@@ -546,8 +546,13 @@ func (c *Consumer) Stop() {
 
 // Close closes the consumer connection with graceful shutdown timeout
 func (c *Consumer) Close() error {
-	// Stop consuming first
-	c.Stop()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Stop consuming first (internal stop without additional lock)
+	if c.cancel != nil {
+		c.cancel()
+	}
 
 	if c.conn != nil {
 		// Wait for in-flight message processing to complete first

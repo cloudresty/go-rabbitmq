@@ -1,5 +1,5 @@
-github.com/cloudresty/emit v1.2.3 h1:e0GrtPipBCArqPQ6Ewj8cUavB5kGkwKrbfsDRpVLlJY=
-github.com/cloudresty/emit v1.2.3/go.mod h1:RNbe5bq6e8o/jf9m4Cz/Y3s9YPFoDBAWyuyxdoNw80I=
+github.com/cloudresty/emit v1.2.4 h1:jkLkPBRsR3YKLvDjeWGugKFH91As+MTG/AMAye8F24g=
+github.com/cloudresty/emit v1.2.4/go.mod h1:RNbe5bq6e8o/jf9m4Cz/Y3s9YPFoDBAWyuyxdoNw80I=
 github.com/cloudresty/ulid v1.2.1 h1:4oncjuEDl/EeirAm2LtTt+De0v5QFT887BF8s6Vp1Ss=
 github.com/cloudresty/ulid v1.2.1/go.mod h1:iyDg3lPcUBYchYi89lADHjjUtItrCKE6KLAe1k+Byj4=
 github.com/rabbitmq/amqp091-go v1.10.0 h1:STpn5XsHlHGcecLmMFCtg7mqq0RnD+zFr4uzukfVhBw=

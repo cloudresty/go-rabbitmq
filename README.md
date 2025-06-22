@@ -1,5 +1,11 @@
 # Go RabbitMQ Package
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/cloudresty/go-rabbitmq.svg)](https://pkg.go.dev/github.com/cloudresty/go-rabbitmq)
+[![Go Tests](https://github.com/cloudresty/go-rabbitmq/actions/workflows/ci.yaml/badge.svg)](https://github.com/cloudresty/go-rabbitmq/actions/workflows/ci.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cloudresty/go-rabbitmq)](https://goreportcard.com/report/github.com/cloudresty/go-rabbitmq)
+[![GitHub Tag](https://img.shields.io/github/v/tag/cloudresty/go-rabbitmq?label=Version)](https://github.com/cloudresty/go-rabbitmq/tags)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 A reusable Go package for RabbitMQ operations including publishing and consuming messages.
 
 &nbsp;
