@@ -151,13 +151,15 @@ func (c *Connection) IsConnected() bool {
 
 // Close closes the connection and channel
 func (c *Connection) Close() error {
+	c.reconnectMutex.Lock()
 	if c.closed {
+		c.reconnectMutex.Unlock()
 		return nil
 	}
+	c.closed = true
+	c.reconnectMutex.Unlock()
 
 	emit.Debug.Msg("Closing RabbitMQ connection")
-
-	c.closed = true
 
 	var err error
 	if c.channel != nil {
@@ -198,7 +200,11 @@ func (c *Connection) NotifyClose() <-chan *amqp.Error {
 // startConnectionMonitoring monitors the connection and automatically reconnects if needed
 func (c *Connection) startConnectionMonitoring() {
 	for {
-		if c.closed {
+		c.reconnectMutex.RLock()
+		isClosed := c.closed
+		c.reconnectMutex.RUnlock()
+
+		if isClosed {
 			return
 		}
 
@@ -206,7 +212,11 @@ func (c *Connection) startConnectionMonitoring() {
 		closeChan := c.NotifyClose()
 		closeErr := <-closeChan
 
-		if closeErr != nil && !c.closed {
+		c.reconnectMutex.RLock()
+		isClosed = c.closed
+		c.reconnectMutex.RUnlock()
+
+		if closeErr != nil && !isClosed {
 			emit.Warn.StructuredFields("Connection lost, attempting to reconnect",
 				emit.ZString("error", closeErr.Error()),
 				emit.ZString("connection_name", c.config.ConnectionName))
