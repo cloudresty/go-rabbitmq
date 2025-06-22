@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cloudresty/emit"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -11,22 +12,25 @@ import (
 
 // Consumer handles consuming messages from RabbitMQ
 type Consumer struct {
-	conn   *Connection
-	config ConsumerConfig
-	mu     sync.RWMutex
-	cancel context.CancelFunc
+	conn     *Connection
+	config   ConsumerConfig
+	mu       sync.RWMutex
+	cancel   context.CancelFunc
+	inFlight *InFlightTracker
 }
 
 // ConsumerConfig holds configuration for the consumer
 type ConsumerConfig struct {
 	ConnectionConfig
-	AutoAck        bool
-	Exclusive      bool
-	NoLocal        bool
-	NoWait         bool
-	PrefetchCount  int
-	PrefetchSize   int
-	PrefetchGlobal bool
+	AutoAck         bool
+	Exclusive       bool
+	NoLocal         bool
+	NoWait          bool
+	PrefetchCount   int
+	PrefetchSize    int
+	PrefetchGlobal  bool
+	MessageTimeout  time.Duration // Timeout for processing individual messages
+	ShutdownTimeout time.Duration // Timeout for graceful consumer shutdown
 }
 
 // ConsumeConfig holds configuration for a single consume operation
@@ -56,8 +60,10 @@ func NewConsumer(url string) (*Consumer, error) {
 		PrefetchCount:    1,
 		PrefetchSize:     0,
 		PrefetchGlobal:   false,
+		MessageTimeout:   time.Minute * 5,  // 5 minute timeout for processing individual messages
+		ShutdownTimeout:  time.Second * 30, // 30 second timeout for graceful shutdown
 	}
-	config.ConnectionConfig.ConnectionName = "go-rabbitmq-consumer"
+	config.ConnectionName = "go-rabbitmq-consumer"
 
 	return NewConsumerWithConfig(config)
 }
@@ -65,7 +71,7 @@ func NewConsumer(url string) (*Consumer, error) {
 // NewConsumerWithConfig creates a new consumer with custom configuration
 func NewConsumerWithConfig(config ConsumerConfig) (*Consumer, error) {
 	emit.Info.StructuredFields("Creating RabbitMQ consumer",
-		emit.ZString("connection_name", config.ConnectionConfig.ConnectionName),
+		emit.ZString("connection_name", config.ConnectionName),
 		emit.ZBool("auto_ack", config.AutoAck),
 		emit.ZInt("prefetch_count", config.PrefetchCount))
 
@@ -73,13 +79,14 @@ func NewConsumerWithConfig(config ConsumerConfig) (*Consumer, error) {
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create consumer connection",
 			emit.ZString("error", err.Error()),
-			emit.ZString("connection_name", config.ConnectionConfig.ConnectionName))
+			emit.ZString("connection_name", config.ConnectionName))
 		return nil, fmt.Errorf("failed to create connection: %w", err)
 	}
 
 	consumer := &Consumer{
-		conn:   conn,
-		config: config,
+		conn:     conn,
+		config:   config,
+		inFlight: NewInFlightTracker(),
 	}
 
 	// Set QoS
@@ -87,12 +94,12 @@ func NewConsumerWithConfig(config ConsumerConfig) (*Consumer, error) {
 		emit.Error.StructuredFields("Failed to set QoS for consumer",
 			emit.ZString("error", err.Error()),
 			emit.ZInt("prefetch_count", config.PrefetchCount))
-		conn.Close()
+		_ = conn.Close() // Ignore error during cleanup
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
 	emit.Info.StructuredFields("RabbitMQ consumer created successfully",
-		emit.ZString("connection_name", config.ConnectionConfig.ConnectionName))
+		emit.ZString("connection_name", config.ConnectionName))
 
 	return consumer, nil
 }
@@ -316,13 +323,66 @@ func (c *Consumer) processMessages(ctx context.Context, config ConsumeConfig, de
 	}
 }
 
-// handleDelivery processes a single message delivery
+// handleDelivery processes a single message delivery with timeout
 func (c *Consumer) handleDelivery(ctx context.Context, config ConsumeConfig, delivery amqp.Delivery, autoAck bool) {
-	err := config.Handler(ctx, delivery.Body)
-	if err != nil {
-		c.handleMessageError(err, config.Queue, delivery.RoutingKey, autoAck, delivery)
+	// Track in-flight message processing
+	if !c.inFlight.Start() {
+		// Consumer is shutting down, NACK and return
+		if !autoAck {
+			_ = delivery.Nack(false, true) // Ignore error, requeue for later processing
+		}
+		emit.Info.StructuredFields("Message rejected due to shutdown",
+			emit.ZString("queue", config.Queue),
+			emit.ZString("routing_key", delivery.RoutingKey))
+		return
+	}
+	defer c.inFlight.Done()
+
+	// Create timeout context for message processing if MessageTimeout is configured
+	var messageCtx context.Context
+	var cancel context.CancelFunc
+
+	if c.config.MessageTimeout > 0 {
+		messageCtx, cancel = context.WithTimeout(ctx, c.config.MessageTimeout)
+		defer cancel()
 	} else {
-		c.handleMessageSuccess(config.Queue, autoAck, delivery)
+		messageCtx = ctx
+	}
+
+	// Process message with timeout
+	done := make(chan error, 1)
+	go func() {
+		done <- config.Handler(messageCtx, delivery.Body)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			c.handleMessageError(err, config.Queue, delivery.RoutingKey, autoAck, delivery)
+		} else {
+			c.handleMessageSuccess(config.Queue, autoAck, delivery)
+		}
+	case <-messageCtx.Done():
+		if messageCtx.Err() == context.DeadlineExceeded {
+			timeoutErr := fmt.Errorf("message processing timeout after %v", c.config.MessageTimeout)
+			emit.Error.StructuredFields("Message processing timeout",
+				emit.ZString("queue", config.Queue),
+				emit.ZString("routing_key", delivery.RoutingKey),
+				emit.ZDuration("timeout", c.config.MessageTimeout))
+			c.handleMessageError(timeoutErr, config.Queue, delivery.RoutingKey, autoAck, delivery)
+		} else {
+			// Context was canceled for another reason (e.g., consumer shutdown)
+			emit.Info.StructuredFields("Message processing canceled",
+				emit.ZString("queue", config.Queue),
+				emit.ZString("routing_key", delivery.RoutingKey))
+			if !autoAck {
+				if nackErr := delivery.Nack(false, true); nackErr != nil {
+					emit.Error.StructuredFields("Failed to nack message during cancellation",
+						emit.ZString("error", nackErr.Error()),
+						emit.ZString("queue", config.Queue))
+				}
+			}
+		}
 	}
 }
 
@@ -413,13 +473,44 @@ func (c *Consumer) ConsumeWithDeliveryHandler(ctx context.Context, config Consum
 					return
 				}
 
-				// Handle the raw delivery
-				err := handler(consumeCtx, delivery)
-				if err != nil {
-					emit.Error.StructuredFields("Error handling delivery",
-						emit.ZString("error", err.Error()),
-						emit.ZString("queue", config.Queue),
-						emit.ZString("routing_key", delivery.RoutingKey))
+				// Handle the raw delivery with timeout if configured
+				if c.config.MessageTimeout > 0 {
+					// Create timeout context for message processing
+					messageCtx, cancel := context.WithTimeout(consumeCtx, c.config.MessageTimeout)
+
+					// Process message with timeout
+					done := make(chan error, 1)
+					go func() {
+						done <- handler(messageCtx, delivery)
+					}()
+
+					select {
+					case err := <-done:
+						cancel() // Clean up timeout context
+						if err != nil {
+							emit.Error.StructuredFields("Error handling delivery",
+								emit.ZString("error", err.Error()),
+								emit.ZString("queue", config.Queue),
+								emit.ZString("routing_key", delivery.RoutingKey))
+						}
+					case <-messageCtx.Done():
+						cancel() // Clean up timeout context
+						if messageCtx.Err() == context.DeadlineExceeded {
+							emit.Error.StructuredFields("Delivery processing timeout",
+								emit.ZString("queue", config.Queue),
+								emit.ZString("routing_key", delivery.RoutingKey),
+								emit.ZDuration("timeout", c.config.MessageTimeout))
+						}
+					}
+				} else {
+					// No timeout configured, process normally
+					err := handler(consumeCtx, delivery)
+					if err != nil {
+						emit.Error.StructuredFields("Error handling delivery",
+							emit.ZString("error", err.Error()),
+							emit.ZString("queue", config.Queue),
+							emit.ZString("routing_key", delivery.RoutingKey))
+					}
 				}
 
 			case closeErr := <-closeChan:
@@ -453,11 +544,55 @@ func (c *Consumer) Stop() {
 	}
 }
 
-// Close closes the consumer connection
+// Close closes the consumer connection with graceful shutdown timeout
 func (c *Consumer) Close() error {
+	// Stop consuming first
 	c.Stop()
+
 	if c.conn != nil {
-		return c.conn.Close()
+		// Wait for in-flight message processing to complete first
+		emit.Info.Msg("Waiting for in-flight message processing to complete")
+		if c.config.ShutdownTimeout > 0 {
+			if err := c.inFlight.CloseWithTimeout(c.config.ShutdownTimeout / 2); err != nil {
+				emit.Warn.StructuredFields("Timeout waiting for in-flight message processing",
+					emit.ZDuration("timeout", c.config.ShutdownTimeout/2))
+			}
+		} else {
+			_ = c.inFlight.Close() // Ignore error during shutdown
+		}
+
+		// If shutdown timeout is configured, wait for graceful shutdown
+		if c.config.ShutdownTimeout > 0 {
+			// Create a timeout context for shutdown
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), c.config.ShutdownTimeout)
+			defer cancel()
+
+			// Signal shutdown and wait for completion or timeout
+			done := make(chan error, 1)
+			go func() {
+				done <- c.conn.Close()
+			}()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					emit.Error.StructuredFields("Error during consumer connection close",
+						emit.ZString("error", err.Error()))
+				} else {
+					emit.Info.StructuredFields("Consumer closed gracefully",
+						emit.ZDuration("shutdown_timeout", c.config.ShutdownTimeout))
+				}
+				return err
+			case <-shutdownCtx.Done():
+				emit.Warn.StructuredFields("Consumer shutdown timeout exceeded, forcing close",
+					emit.ZDuration("timeout", c.config.ShutdownTimeout))
+				// Force close the connection
+				return c.conn.Close()
+			}
+		} else {
+			// No timeout configured, close immediately
+			return c.conn.Close()
+		}
 	}
 	return nil
 }

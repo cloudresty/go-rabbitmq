@@ -30,7 +30,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	consumer, err := rabbitmq.NewConsumer("amqp://guest:guest@localhost:5672/")
 	if err != nil {
@@ -38,7 +40,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	// Setup topology
 	err = publisher.DeclareExchange("order-events", "topic", true, false, false, false, nil)

@@ -11,18 +11,21 @@ import (
 
 // Publisher handles publishing messages to RabbitMQ
 type Publisher struct {
-	conn   *Connection
-	config PublisherConfig
+	conn     *Connection
+	config   PublisherConfig
+	inFlight *InFlightTracker
 }
 
 // PublisherConfig holds configuration for the publisher
 type PublisherConfig struct {
 	ConnectionConfig
-	DefaultExchange   string
-	DefaultRoutingKey string
-	Persistent        bool
-	Mandatory         bool
-	Immediate         bool
+	DefaultExchange     string
+	DefaultRoutingKey   string
+	Persistent          bool
+	Mandatory           bool
+	Immediate           bool
+	ConfirmationTimeout time.Duration // Timeout for publisher confirmations
+	ShutdownTimeout     time.Duration // Timeout for graceful publisher shutdown
 }
 
 // PublishConfig holds configuration for a single publish operation
@@ -54,12 +57,14 @@ type PublishMessageConfig struct {
 // NewPublisher creates a new publisher with default configuration
 func NewPublisher(url string) (*Publisher, error) {
 	config := PublisherConfig{
-		ConnectionConfig: DefaultConnectionConfig(url),
-		Persistent:       true,
-		Mandatory:        false,
-		Immediate:        false,
+		ConnectionConfig:    DefaultConnectionConfig(url),
+		Persistent:          true,
+		Mandatory:           false,
+		Immediate:           false,
+		ConfirmationTimeout: time.Second * 5,
+		ShutdownTimeout:     time.Second * 15, // 15 second timeout for graceful shutdown
 	}
-	config.ConnectionConfig.ConnectionName = "go-rabbitmq-publisher"
+	config.ConnectionName = "go-rabbitmq-publisher"
 
 	return NewPublisherWithConfig(config)
 }
@@ -67,7 +72,7 @@ func NewPublisher(url string) (*Publisher, error) {
 // NewPublisherWithConfig creates a new publisher with custom configuration
 func NewPublisherWithConfig(config PublisherConfig) (*Publisher, error) {
 	emit.Info.StructuredFields("Creating RabbitMQ publisher",
-		emit.ZString("connection_name", config.ConnectionConfig.ConnectionName),
+		emit.ZString("connection_name", config.ConnectionName),
 		emit.ZString("default_exchange", config.DefaultExchange),
 		emit.ZBool("persistent", config.Persistent))
 
@@ -75,17 +80,18 @@ func NewPublisherWithConfig(config PublisherConfig) (*Publisher, error) {
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create publisher connection",
 			emit.ZString("error", err.Error()),
-			emit.ZString("connection_name", config.ConnectionConfig.ConnectionName))
+			emit.ZString("connection_name", config.ConnectionName))
 		return nil, fmt.Errorf("failed to create connection: %w", err)
 	}
 
 	publisher := &Publisher{
-		conn:   conn,
-		config: config,
+		conn:     conn,
+		config:   config,
+		inFlight: NewInFlightTracker(),
 	}
 
 	emit.Info.StructuredFields("RabbitMQ publisher created successfully",
-		emit.ZString("connection_name", config.ConnectionConfig.ConnectionName))
+		emit.ZString("connection_name", config.ConnectionName))
 
 	return publisher, nil
 }
@@ -219,6 +225,12 @@ func (p *Publisher) DeclareQueueWithConfig(config QueueConfig) error {
 
 // Publish publishes a message to RabbitMQ
 func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
+	// Check if shutdown is in progress
+	if !p.inFlight.Start() {
+		return fmt.Errorf("publisher is shutting down, rejecting new publish operations")
+	}
+	defer p.inFlight.Done()
+
 	if !p.conn.IsConnected() {
 		emit.Error.StructuredFields("Publisher not connected when publishing message",
 			emit.ZString("exchange", config.Exchange),
@@ -311,6 +323,12 @@ func (p *Publisher) Publish(ctx context.Context, config PublishConfig) error {
 
 // PublishMessage publishes a Message object to RabbitMQ
 func (p *Publisher) PublishMessage(ctx context.Context, config PublishMessageConfig) error {
+	// Check if shutdown is in progress
+	if !p.inFlight.Start() {
+		return fmt.Errorf("publisher is shutting down, rejecting new publish operations")
+	}
+	defer p.inFlight.Done()
+
 	if !p.conn.IsConnected() {
 		emit.Error.StructuredFields("Publisher not connected when publishing message",
 			emit.ZString("exchange", config.Exchange),
@@ -349,6 +367,12 @@ func (p *Publisher) PublishMessage(ctx context.Context, config PublishMessageCon
 
 // PublishWithConfirmation publishes a message with confirmation
 func (p *Publisher) PublishWithConfirmation(ctx context.Context, config PublishConfig) error {
+	// Check if shutdown is in progress
+	if !p.inFlight.Start() {
+		return fmt.Errorf("publisher is shutting down, rejecting new publish operations")
+	}
+	defer p.inFlight.Done()
+
 	if !p.conn.IsConnected() {
 		emit.Error.StructuredFields("Publisher not connected when publishing with confirmation",
 			emit.ZString("exchange", config.Exchange),
@@ -395,18 +419,61 @@ func (p *Publisher) PublishWithConfirmation(ctx context.Context, config PublishC
 			emit.ZString("exchange", config.Exchange),
 			emit.ZString("routing_key", config.RoutingKey))
 		return ctx.Err()
-	case <-time.After(time.Second * 5):
+	case <-time.After(p.config.ConfirmationTimeout):
 		emit.Error.StructuredFields("Timeout waiting for confirmation",
 			emit.ZString("exchange", config.Exchange),
-			emit.ZString("routing_key", config.RoutingKey))
-		return fmt.Errorf("timeout waiting for confirmation")
+			emit.ZString("routing_key", config.RoutingKey),
+			emit.ZDuration("timeout", p.config.ConfirmationTimeout))
+		return fmt.Errorf("timeout waiting for confirmation after %v", p.config.ConfirmationTimeout)
 	}
 }
 
-// Close closes the publisher connection
+// Close closes the publisher connection with graceful shutdown timeout
 func (p *Publisher) Close() error {
 	if p.conn != nil {
-		return p.conn.Close()
+		// Wait for in-flight operations to complete first
+		emit.Info.Msg("Waiting for in-flight publish operations to complete")
+		if p.config.ShutdownTimeout > 0 {
+			if err := p.inFlight.CloseWithTimeout(p.config.ShutdownTimeout / 2); err != nil {
+				emit.Warn.StructuredFields("Timeout waiting for in-flight operations",
+					emit.ZDuration("timeout", p.config.ShutdownTimeout/2))
+			}
+		} else {
+			_ = p.inFlight.Close() // Ignore error during shutdown
+		}
+
+		// If shutdown timeout is configured, wait for graceful shutdown
+		if p.config.ShutdownTimeout > 0 {
+			// Create a timeout context for shutdown
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), p.config.ShutdownTimeout)
+			defer cancel()
+
+			// Signal shutdown and wait for completion or timeout
+			done := make(chan error, 1)
+			go func() {
+				done <- p.conn.Close()
+			}()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					emit.Error.StructuredFields("Error during publisher connection close",
+						emit.ZString("error", err.Error()))
+				} else {
+					emit.Info.StructuredFields("Publisher closed gracefully",
+						emit.ZDuration("shutdown_timeout", p.config.ShutdownTimeout))
+				}
+				return err
+			case <-shutdownCtx.Done():
+				emit.Warn.StructuredFields("Publisher shutdown timeout exceeded, forcing close",
+					emit.ZDuration("timeout", p.config.ShutdownTimeout))
+				// Force close the connection
+				return p.conn.Close()
+			}
+		} else {
+			// No timeout configured, close immediately
+			return p.conn.Close()
+		}
 	}
 	return nil
 }

@@ -27,7 +27,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	// Declare queue
 	queue, err := consumer.DeclareQueue("order-processing", true, false, false, false, nil)

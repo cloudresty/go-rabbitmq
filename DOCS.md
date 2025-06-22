@@ -613,6 +613,200 @@ config := rabbitmq.ConsumerConfig{
 }
 ```
 
+### Timeout Configuration
+
+The package provides comprehensive timeout controls for production reliability and operational safety.
+
+#### Connection Timeouts
+
+Control connection establishment and channel creation timeouts:
+
+```go
+config := rabbitmq.ConnectionConfig{
+    URL:            "amqp://localhost:5672",
+    DialTimeout:    time.Second * 30, // TCP connection timeout
+    ChannelTimeout: time.Second * 10, // Channel creation timeout
+    // ...other settings
+}
+```
+
+**Default Values:**
+
+- `DialTimeout`: 30 seconds - TCP connection establishment
+- `ChannelTimeout`: 10 seconds - AMQP channel creation
+
+#### Publisher Timeouts
+
+Configure publisher confirmation timeouts:
+
+```go
+config := rabbitmq.PublisherConfig{
+    ConnectionConfig:    connectionConfig,
+    ConfirmationTimeout: time.Second * 5, // Publisher confirmation timeout
+    // ...other settings
+}
+```
+
+**Default Values:**
+
+- `ConfirmationTimeout`: 5 seconds - Waiting for publish confirmations
+
+**Usage Example:**
+
+```go
+// Custom publisher with extended confirmation timeout
+publisher, err := rabbitmq.NewPublisherWithConfig(rabbitmq.PublisherConfig{
+    ConnectionConfig:    rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    ConfirmationTimeout: time.Second * 15, // Extended timeout for slow brokers
+    Persistent:          true,
+})
+```
+
+#### Consumer Timeouts
+
+Configure message processing and shutdown timeouts:
+
+```go
+config := rabbitmq.ConsumerConfig{
+    ConnectionConfig: rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    MessageTimeout:   time.Minute * 5,  // Individual message processing timeout
+    ShutdownTimeout:  time.Second * 30, // Graceful shutdown timeout
+}
+```
+
+**Default Values:**
+
+- `MessageTimeout`: 5 minutes - Individual message processing limit
+- `ShutdownTimeout`: 30 seconds - Graceful consumer shutdown
+
+**Message Processing Timeout:**
+
+- Automatically cancels long-running message handlers
+- Sends NACK and requeues messages when timeout exceeded
+- Prevents consumer blocking on stuck handlers
+
+**Shutdown Timeout:**
+
+- Controls graceful shutdown duration
+- Forces immediate close if timeout exceeded
+- Ensures timely resource cleanup
+
+**Usage Example:**
+
+```go
+// Consumer with custom timeouts for long-running tasks
+consumer, err := rabbitmq.NewConsumerWithConfig(rabbitmq.ConsumerConfig{
+    ConnectionConfig: rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    MessageTimeout:   time.Minute * 15, // 15-minute processing limit
+    ShutdownTimeout:  time.Minute * 2,  // 2-minute shutdown grace period
+    PrefetchCount:    1,                // Process one message at a time
+})
+
+err = consumer.Consume(ctx, rabbitmq.ConsumeConfig{
+    Queue: "long-running-tasks",
+    Handler: func(ctx context.Context, message []byte) error {
+        // Long-running task with automatic timeout protection
+        return processLongRunningTask(ctx, message)
+    },
+})
+```
+
+#### Production Timeout Recommendations
+
+**Connection Timeouts:**
+
+- **Development**: Default values (30s dial, 10s channel)
+- **Production**: Reduce for faster failure detection (15s dial, 5s channel)
+- **High-latency networks**: Increase dial timeout (60s+)
+
+**Publisher Timeouts:**
+
+- **High-throughput**: 2-5 seconds for fast confirmation
+- **Standard applications**: 5-10 seconds (default: 5s)
+- **Batch processing**: 15-30 seconds for large messages
+
+**Consumer Timeouts:**
+
+- **Fast processing**: 30 seconds - 2 minutes
+- **Standard processing**: 5 minutes (default)
+- **Long-running tasks**: 15-30 minutes
+- **Background jobs**: 1+ hours
+
+**Shutdown Timeouts:**
+
+- **Development**: 30 seconds (default)
+- **Production**: 1-2 minutes for graceful drain
+- **Critical systems**: 5+ minutes to prevent data loss
+
+#### Timeout Best Practices
+
+**1. Context Propagation**
+Always respect context timeouts in message handlers:
+
+```go
+handler := func(ctx context.Context, message []byte) error {
+    // Respect both consumer timeout and request context
+    select {
+    case <-ctx.Done():
+        return ctx.Err() // Timeout or cancellation
+    default:
+        return processMessage(ctx, message)
+    }
+}
+```
+
+**2. Timeout Monitoring**
+Monitor timeout occurrences for capacity planning:
+
+```go
+// Consumer will automatically log timeout events via emit library
+// Monitor logs for patterns:
+// "Message processing timeout" - Indicates insufficient MessageTimeout
+// "Consumer shutdown timeout exceeded" - Indicates insufficient ShutdownTimeout
+```
+
+**3. Graceful Degradation**
+Implement fallback strategies for timeout scenarios:
+
+```go
+handler := func(ctx context.Context, message []byte) error {
+    done := make(chan error, 1)
+    go func() {
+        done <- heavyProcessing(message)
+    }()
+
+    select {
+    case err := <-done:
+        return err
+    case <-ctx.Done():
+        // Timeout - save for later processing
+        return saveForRetry(message)
+    }
+}
+```
+
+#### Timeout Troubleshooting
+
+**Common Issues:**
+
+- **Frequent message timeouts**: Increase `MessageTimeout` or optimize handler performance
+- **Slow connection establishment**: Increase `DialTimeout` or check network latency
+- **Publisher confirmation delays**: Increase `ConfirmationTimeout` or check broker performance
+- **Unclean shutdowns**: Increase `ShutdownTimeout` or reduce message processing time
+
+**Diagnostic Commands:**
+
+```bash
+# Check RabbitMQ connection metrics
+rabbitmqctl list_connections name timeout
+
+# Monitor queue processing rates
+rabbitmqctl list_queues name messages_ready messages_unacknowledged
+
+# Check consumer performance
+rabbitmqctl list_consumers queue_name channel ack_required prefetch_count
+```
+
 ## Best Practices
 
 ### 1. Connection Management
@@ -752,8 +946,363 @@ err := consumer.ConsumeWithDeliveryHandler(ctx, config,
 
 - [x] **Implement proper logging** (emit library integrated with structured, high-performance logging)
 - [ ] Set up monitoring and metrics
-- [ ] Configure appropriate timeouts
-- [ ] Implement graceful shutdown
+- [x] **Configure appropriate timeouts** (connection, channel, message processing, confirmation, and shutdown timeouts)
+- [x] **Implement graceful shutdown** (shutdown manager, in-flight tracking, signal handling, and coordinated shutdown)
 - [ ] Test failover scenarios
 - [ ] Monitor memory usage
 - [ ] Set up alerting for connection failures
+
+## Graceful Shutdown
+
+The package provides comprehensive graceful shutdown functionality to ensure clean termination of RabbitMQ operations without data loss or resource leaks.
+
+### Why Graceful Shutdown?
+
+**Production Safety:**
+
+- **Data Integrity**: Ensures in-flight messages are processed before shutdown
+- **Resource Cleanup**: Proper connection and channel closure
+- **Zero Data Loss**: Prevents message loss during service restarts
+- **Operational Reliability**: Predictable shutdown behavior
+
+**Best Practices Compliance:**
+
+- **Signal Handling**: Standard SIGINT/SIGTERM signal processing
+- **Timeout Controls**: Configurable shutdown timeouts
+- **Component Coordination**: Unified shutdown across multiple components
+- **Monitoring Integration**: Structured logging of shutdown events
+
+### Core Components
+
+#### 1. Shutdown Manager
+
+Central coordinator for graceful shutdown across multiple RabbitMQ components:
+
+```go
+// Create shutdown manager with configuration
+config := rabbitmq.DefaultShutdownConfig()
+shutdownManager := rabbitmq.NewShutdownManager(config)
+
+// Setup automatic signal handling
+shutdownManager.SetupSignalHandler()
+
+// Register components for coordinated shutdown
+shutdownManager.Register(publisher)
+shutdownManager.Register(consumer)
+
+// Wait for shutdown completion
+shutdownManager.Wait()
+```
+
+#### 2. In-Flight Operation Tracking
+
+Automatically tracks and waits for ongoing operations:
+
+- **Publishers**: Waits for pending publish confirmations
+- **Consumers**: Waits for current message processing to complete
+- **Timeout Protection**: Prevents indefinite waiting
+
+#### 3. Configurable Timeouts
+
+Fine-grained control over shutdown timing:
+
+```go
+config := rabbitmq.ShutdownConfig{
+    Timeout:           time.Second * 30, // Overall shutdown timeout
+    SignalTimeout:     time.Second * 5,  // Grace period after signal
+    GracefulDrainTime: time.Second * 10, // Time for in-flight operations
+}
+```
+
+### Publisher Graceful Shutdown
+
+Publishers now include shutdown timeout configuration and in-flight tracking:
+
+```go
+publisherConfig := rabbitmq.PublisherConfig{
+    ConnectionConfig:    rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    ShutdownTimeout:     time.Second * 15, // Graceful shutdown timeout
+    ConfirmationTimeout: time.Second * 5,  // Publish confirmation timeout
+}
+
+publisher, _ := rabbitmq.NewPublisherWithConfig(publisherConfig)
+```
+
+**Publisher Shutdown Features:**
+
+- **In-Flight Tracking**: Monitors pending publish operations
+- **Confirmation Waiting**: Waits for outstanding confirmations
+- **Timeout Protection**: Forces shutdown if timeout exceeded
+- **New Operation Rejection**: Rejects new publishes during shutdown
+
+### Consumer Graceful Shutdown
+
+Consumers include message processing timeout and graceful drain:
+
+```go
+consumerConfig := rabbitmq.ConsumerConfig{
+    ConnectionConfig: rabbitmq.DefaultConnectionConfig("amqp://localhost:5672"),
+    MessageTimeout:   time.Minute * 5,  // Message processing timeout
+    ShutdownTimeout:  time.Second * 30, // Graceful shutdown timeout
+}
+
+consumer, _ := rabbitmq.NewConsumerWithConfig(consumerConfig)
+```
+
+**Consumer Shutdown Features:**
+
+- **Message Processing Completion**: Waits for current messages to finish
+- **NACK During Shutdown**: Requeues messages received during shutdown
+- **Processing Timeout**: Cancels long-running message handlers
+- **Clean Acknowledgments**: Ensures proper message acknowledgment
+
+### Basic Graceful Shutdown
+
+Simple graceful shutdown with signal handling:
+
+```go
+package main
+
+import (
+    "context"
+    "os"
+    "os/signal"
+    "syscall"
+
+    "github.com/cloudresty/emit"
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Create components
+    publisher, _ := rabbitmq.NewPublisher("amqp://localhost:5672")
+    consumer, _ := rabbitmq.NewConsumer("amqp://localhost:5672")
+
+    // Setup signal handling
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+    // Start operations...
+    ctx, cancel := context.WithCancel(context.Background())
+    go consumer.Consume(ctx, config)
+
+    // Wait for shutdown signal
+    <-sigChan
+    emit.Info.Msg("Received shutdown signal")
+
+    // Graceful shutdown
+    cancel() // Stop consuming
+    publisher.Close() // Wait for publisher shutdown
+    consumer.Close()  // Wait for consumer shutdown
+
+    emit.Info.Msg("Graceful shutdown completed")
+}
+```
+
+### Advanced Graceful Shutdown
+
+Using the shutdown manager for coordinated shutdown:
+
+```go
+package main
+
+import (
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Create shutdown manager
+    shutdownManager := rabbitmq.NewShutdownManager(
+        rabbitmq.DefaultShutdownConfig())
+
+    // Setup automatic signal handling
+    shutdownManager.SetupSignalHandler()
+
+    // Create and register components
+    publisher, _ := rabbitmq.NewPublisher("amqp://localhost:5672")
+    consumer, _ := rabbitmq.NewConsumer("amqp://localhost:5672")
+
+    shutdownManager.Register(publisher)
+    shutdownManager.Register(consumer)
+
+    // Start operations...
+
+    // Wait for shutdown (blocks until SIGINT/SIGTERM)
+    shutdownManager.Wait()
+}
+```
+
+### Shutdown Configuration
+
+#### Shutdown Configuration Defaults
+
+```go
+config := rabbitmq.DefaultShutdownConfig()
+// Timeout: 30 seconds (overall shutdown timeout)
+// SignalTimeout: 5 seconds (grace period after signal)
+// GracefulDrainTime: 10 seconds (in-flight operation timeout)
+```
+
+#### Custom Configuration
+
+```go
+config := rabbitmq.ShutdownConfig{
+    Timeout:           time.Minute * 2,  // 2-minute overall timeout
+    SignalTimeout:     time.Second * 10, // 10-second signal grace period
+    GracefulDrainTime: time.Second * 30, // 30-second drain time
+}
+
+shutdownManager := rabbitmq.NewShutdownManager(config)
+```
+
+### Production Recommendations
+
+#### Timeout Settings
+
+**Development Environment:**
+
+- Overall Timeout: 30 seconds
+- Signal Timeout: 5 seconds
+- Drain Time: 10 seconds
+
+**Production Environment:**
+
+- Overall Timeout: 2-5 minutes
+- Signal Timeout: 30 seconds
+- Drain Time: 1-2 minutes
+
+**High-Throughput Systems:**
+
+- Overall Timeout: 5-10 minutes
+- Signal Timeout: 1 minute
+- Drain Time: 3-5 minutes
+
+#### Monitoring Integration
+
+Monitor shutdown events for operational insights:
+
+```go
+// Shutdown events are automatically logged via emit library:
+// - "Starting graceful shutdown" - Shutdown initiated
+// - "Component shutdown successful" - Individual component closed
+// - "Graceful shutdown completed successfully" - Full shutdown success
+// - "Graceful shutdown timeout exceeded" - Timeout warnings
+```
+
+#### Container Integration
+
+Proper shutdown in containerized environments:
+
+```dockerfile
+# Dockerfile
+STOPSIGNAL SIGTERM
+```
+
+```yaml
+# Kubernetes
+spec:
+  terminationGracePeriodSeconds: 300  # 5 minutes
+  containers:
+  - name: rabbitmq-app
+    # ... other config
+```
+
+### Graceful Shutdown Best Practices
+
+#### 1. Always Use Signal Handling
+
+```go
+// ✅ Good - Proper signal handling
+shutdownManager.SetupSignalHandler()
+
+// ❌ Bad - No signal handling
+// Application may be forcefully terminated
+```
+
+#### 2. Set Appropriate Timeouts
+
+```go
+// ✅ Good - Reasonable timeouts
+config := rabbitmq.ShutdownConfig{
+    Timeout: time.Minute * 2, // Allows time for cleanup
+}
+
+// ❌ Bad - Too short timeout
+config := rabbitmq.ShutdownConfig{
+    Timeout: time.Second * 5, // May interrupt operations
+}
+```
+
+#### 3. Register All Components
+
+```go
+// ✅ Good - All components registered
+shutdownManager.Register(publisher)
+shutdownManager.Register(consumer)
+shutdownManager.Register(connection)
+
+// ❌ Bad - Some components missing
+shutdownManager.Register(publisher)
+// Missing consumer registration
+```
+
+#### 4. Use Context for Operations
+
+```go
+// ✅ Good - Respect context cancellation
+func processMessage(ctx context.Context, msg []byte) error {
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+        return doProcessing(msg)
+    }
+}
+
+// ❌ Bad - Ignore context
+func processMessage(ctx context.Context, msg []byte) error {
+    // No context checking - may block shutdown
+    return doProcessing(msg)
+}
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+**Shutdown Timeouts:**
+
+- Increase overall shutdown timeout
+- Optimize message processing speed
+- Reduce in-flight operation counts
+
+**Resource Leaks:**
+
+- Ensure all components are registered with shutdown manager
+- Check for goroutines that don't respect context cancellation
+- Monitor connection and channel closure
+
+**Data Loss:**
+
+- Verify message acknowledgment before shutdown
+- Check consumer auto-ack settings
+- Ensure proper error handling during shutdown
+
+#### Diagnostic Commands
+
+```bash
+# Monitor graceful shutdown logs
+grep "graceful shutdown" /var/log/app.log
+
+# Check for resource cleanup
+netstat -an | grep :5672
+
+# Verify process termination
+ps aux | grep your-app
+```
+
+For complete examples, see:
+
+- `examples/graceful-shutdown/main.go` - Comprehensive graceful shutdown demo
+- `examples/consumer/main.go` - Consumer with signal handling
+- `examples/reconnection-test/main.go` - Graceful shutdown during reconnection

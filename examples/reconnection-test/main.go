@@ -31,7 +31,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Set up graceful shutdown
 	sigChan := make(chan os.Signal, 1)

@@ -27,7 +27,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close() // Ignore error during cleanup
+	}()
 
 	// Setup topology
 	err = rabbitmq.SetupTopology(conn,
@@ -86,7 +88,7 @@ func main() {
 		Persistent:       true,
 		Mandatory:        false,
 	}
-	publisherConfig.ConnectionConfig.ConnectionName = "event-publisher"
+	publisherConfig.ConnectionName = "event-publisher"
 
 	publisher, err := rabbitmq.NewPublisherWithConfig(publisherConfig)
 	if err != nil {
@@ -94,7 +96,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Publish various events
 	events := []Event{

@@ -23,7 +23,9 @@ func TestConnectionCreation(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not connect to RabbitMQ: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close() // Ignore error during cleanup
+	}()
 
 	if !conn.IsConnected() {
 		t.Error("Expected connection to be active")
@@ -39,7 +41,9 @@ func TestPublisherCreation(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	if !publisher.IsConnected() {
 		t.Error("Expected publisher to be connected")
@@ -55,7 +59,9 @@ func TestConsumerCreation(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	if !consumer.IsConnected() {
 		t.Error("Expected consumer to be connected")
@@ -72,14 +78,18 @@ func TestPublishAndConsume(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Create consumer
 	consumer, err := NewConsumer(testURL)
 	if err != nil {
 		t.Skipf("Could not create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	// Setup test queue
 	testQueue := "test-queue-" + time.Now().Format("20060102150405")
@@ -143,7 +153,9 @@ func TestTopologySetup(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create connection: %v", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close() // Ignore error during cleanup
+	}()
 
 	testExchange := "test-exchange-" + time.Now().Format("20060102150405")
 	testQueue := "test-queue-" + time.Now().Format("20060102150405")

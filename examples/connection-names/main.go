@@ -32,7 +32,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Example 2: Consumer with custom connection name and auto-reconnection
 	consumerConfig := rabbitmq.ConsumerConfig{
@@ -56,7 +58,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	// Publish a test message
 	err = publisher.Publish(context.Background(), rabbitmq.PublishConfig{

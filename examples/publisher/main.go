@@ -27,7 +27,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Declare exchange
 	err = publisher.DeclareExchange("orders", "direct", true, false, false, false, nil)

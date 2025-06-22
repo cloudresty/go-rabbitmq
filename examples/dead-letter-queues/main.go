@@ -21,7 +21,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore error during cleanup
+	}()
 
 	// Create consumer
 	consumer, err := rabbitmq.NewConsumer("amqp://guest:guest@localhost:5672/")
@@ -30,7 +32,9 @@ func main() {
 			emit.ZString("error", err.Error()))
 		os.Exit(1)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore error during cleanup
+	}()
 
 	fmt.Println("1. Setting up topology with automatic dead letter infrastructure...")
 

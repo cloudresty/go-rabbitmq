@@ -1,7 +1,9 @@
 package rabbitmq
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -30,6 +32,8 @@ type ConnectionConfig struct {
 	AutoReconnect        bool          // Enable automatic reconnection
 	ReconnectDelay       time.Duration // Delay between reconnection attempts
 	MaxReconnectAttempts int           // Max reconnection attempts (0 = unlimited)
+	DialTimeout          time.Duration // Timeout for establishing connection
+	ChannelTimeout       time.Duration // Timeout for channel operations
 }
 
 // DefaultConnectionConfig returns a default connection configuration
@@ -43,6 +47,8 @@ func DefaultConnectionConfig(url string) ConnectionConfig {
 		AutoReconnect:        true,
 		ReconnectDelay:       time.Second * 5,
 		MaxReconnectAttempts: 0, // Unlimited
+		DialTimeout:          time.Second * 30,
+		ChannelTimeout:       time.Second * 10,
 	}
 }
 
@@ -95,9 +101,12 @@ func (c *Connection) connect(config ConnectionConfig) error {
 				emit.ZString("connection_name", config.ConnectionName))
 		}
 
-		// Configure connection properties
+		// Configure connection properties with timeout
 		amqpConfig := amqp.Config{
 			Heartbeat: config.Heartbeat,
+			Dial: func(network, addr string) (net.Conn, error) {
+				return net.DialTimeout(network, addr, config.DialTimeout)
+			},
 			Properties: amqp.Table{
 				"connection_name": config.ConnectionName,
 			},
@@ -116,12 +125,38 @@ func (c *Connection) connect(config ConnectionConfig) error {
 			continue
 		}
 
-		c.channel, err = c.conn.Channel()
-		if err != nil {
-			c.conn.Close()
+		// Create channel with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), config.ChannelTimeout)
+		channelDone := make(chan error, 1)
+
+		go func() {
+			var channelErr error
+			c.channel, channelErr = c.conn.Channel()
+			channelDone <- channelErr
+		}()
+
+		select {
+		case err = <-channelDone:
+			cancel()
+			if err != nil {
+				_ = c.conn.Close() // Ignore error during cleanup
+				if attempt == config.RetryAttempts-1 {
+					emit.Error.StructuredFields("Failed to create channel after all retry attempts",
+						emit.ZString("error", err.Error()),
+						emit.ZInt("attempts", config.RetryAttempts),
+						emit.ZString("connection_name", config.ConnectionName))
+					return fmt.Errorf("failed to create channel after %d attempts: %w", config.RetryAttempts, err)
+				}
+				time.Sleep(config.RetryDelay)
+				continue
+			}
+		case <-ctx.Done():
+			cancel()
+			_ = c.conn.Close() // Ignore error during cleanup
+			err = fmt.Errorf("timeout creating channel after %v", config.ChannelTimeout)
 			if attempt == config.RetryAttempts-1 {
-				emit.Error.StructuredFields("Failed to create channel after all retry attempts",
-					emit.ZString("error", err.Error()),
+				emit.Error.StructuredFields("Channel creation timeout after all retry attempts",
+					emit.ZDuration("timeout", config.ChannelTimeout),
 					emit.ZInt("attempts", config.RetryAttempts),
 					emit.ZString("connection_name", config.ConnectionName))
 				return fmt.Errorf("failed to create channel after %d attempts: %w", config.RetryAttempts, err)
@@ -263,10 +298,10 @@ func (c *Connection) attemptReconnection() {
 
 		// Close existing connections if they exist
 		if c.channel != nil {
-			c.channel.Close()
+			_ = c.channel.Close() // Ignore error during cleanup
 		}
 		if c.conn != nil {
-			c.conn.Close()
+			_ = c.conn.Close() // Ignore error during cleanup
 		}
 
 		// Attempt to reconnect
