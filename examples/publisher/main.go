@@ -20,16 +20,22 @@ type OrderMessage struct {
 }
 
 func main() {
-	// Create a publisher
-	publisher, err := rabbitmq.NewPublisher("amqp://guest:guest@localhost:5672/")
+	emit.Info.Msg("Starting publisher example with environment configuration")
+
+	// Create a publisher from environment variables
+	// Set RABBITMQ_HOST, RABBITMQ_USERNAME, RABBITMQ_PASSWORD etc., or use defaults
+	publisher, err := rabbitmq.NewPublisher()
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create publisher",
-			emit.ZString("error", err.Error()))
+		emit.Error.StructuredFields("Failed to create publisher from environment",
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables or use defaults"))
 		os.Exit(1)
 	}
 	defer func() {
 		_ = publisher.Close() // Ignore error during cleanup
 	}()
+
+	emit.Info.Msg("Publisher created successfully from environment configuration")
 
 	// Declare exchange
 	err = publisher.DeclareExchange("orders", "direct", true, false, false, false, nil)

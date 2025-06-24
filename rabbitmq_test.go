@@ -37,7 +37,10 @@ func TestPublisherCreation(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	publisher, err := NewPublisher(testURL)
+	config := PublisherConfig{
+		ConnectionConfig: DefaultConnectionConfig(testURL),
+	}
+	publisher, err := NewPublisherWithConfig(config)
 	if err != nil {
 		t.Skipf("Could not create publisher: %v", err)
 	}
@@ -55,7 +58,10 @@ func TestConsumerCreation(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	consumer, err := NewConsumer(testURL)
+	config := ConsumerConfig{
+		ConnectionConfig: DefaultConnectionConfig(testURL),
+	}
+	consumer, err := NewConsumerWithConfig(config)
 	if err != nil {
 		t.Skipf("Could not create consumer: %v", err)
 	}
@@ -74,7 +80,10 @@ func TestPublishAndConsume(t *testing.T) {
 	}
 
 	// Create publisher
-	publisher, err := NewPublisher(testURL)
+	publisherConfig := PublisherConfig{
+		ConnectionConfig: DefaultConnectionConfig(testURL),
+	}
+	publisher, err := NewPublisherWithConfig(publisherConfig)
 	if err != nil {
 		t.Skipf("Could not create publisher: %v", err)
 	}
@@ -86,7 +95,10 @@ func TestPublishAndConsume(t *testing.T) {
 	}()
 
 	// Create consumer
-	consumer, err := NewConsumer(testURL)
+	consumerConfig := ConsumerConfig{
+		ConnectionConfig: DefaultConnectionConfig(testURL),
+	}
+	consumer, err := NewConsumerWithConfig(consumerConfig)
 	if err != nil {
 		t.Skipf("Could not create consumer: %v", err)
 	}

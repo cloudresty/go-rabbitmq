@@ -10,26 +10,32 @@ import (
 )
 
 func main() {
-	// Create publisher and consumer
-	publisher, err := rabbitmq.NewPublisher("amqp://guest:guest@localhost:5672/")
+	emit.Info.Msg("Starting production queues example with environment configuration")
+
+	// Create publisher and consumer from environment variables
+	publisher, err := rabbitmq.NewPublisher()
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create publisher",
-			emit.ZString("error", err.Error()))
+		emit.Error.StructuredFields("Failed to create publisher from environment",
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables or use defaults"))
 		os.Exit(1)
 	}
 	defer func() {
 		_ = publisher.Close() // Ignore error during cleanup
 	}()
 
-	consumer, err := rabbitmq.NewConsumer("amqp://guest:guest@localhost:5672/")
+	consumer, err := rabbitmq.NewConsumer()
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create consumer",
-			emit.ZString("error", err.Error()))
+		emit.Error.StructuredFields("Failed to create consumer from environment",
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables or use defaults"))
 		os.Exit(1)
 	}
 	defer func() {
 		_ = consumer.Close() // Ignore error during cleanup
 	}()
+
+	emit.Info.Msg("Publisher and consumer created successfully from environment configuration")
 
 	// Example 1: Create a production-ready Quorum Queue
 	emit.Info.Msg("Creating Quorum Queue for high availability...")

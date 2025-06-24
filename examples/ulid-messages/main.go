@@ -23,8 +23,8 @@ type OrderEvent struct {
 }
 
 func main() {
-	// Create publisher and consumer with ULID message IDs
-	publisher, err := rabbitmq.NewPublisher("amqp://guest:guest@localhost:5672/")
+	// Create publisher and consumer with ULID message IDs from environment variables
+	publisher, err := rabbitmq.NewPublisher()
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create publisher",
 			emit.ZString("error", err.Error()))
@@ -34,7 +34,7 @@ func main() {
 		_ = publisher.Close() // Ignore error during cleanup
 	}()
 
-	consumer, err := rabbitmq.NewConsumer("amqp://guest:guest@localhost:5672/")
+	consumer, err := rabbitmq.NewConsumer()
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create consumer",
 			emit.ZString("error", err.Error()))

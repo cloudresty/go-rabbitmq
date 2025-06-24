@@ -1,5 +1,7 @@
 {
     "cSpell.words": [
+        "amqps",
+        "AMQPURL",
         "brhryn",
         "cloudresty",
         "coverprofile",
@@ -7,11 +9,19 @@
         "fanout",
         "goleak",
         "goroutines",
+        "MYAPP",
+        "mypassword",
+        "myuser",
         "NDEKTSV",
+        "prefixhost",
+        "prefixuser",
         "rabbitmqctl",
         "RRFFQ",
         "STOPSIGNAL",
         "syscall",
+        "testhost",
+        "testpass",
+        "testuser",
         "tsqaknhy",
         "TTTTTTTTTTTTTRRRRRRRRRRRRR",
         "ulids"

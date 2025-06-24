@@ -54,34 +54,72 @@ type PublishMessageConfig struct {
 	Message    *Message
 }
 
-// NewPublisher creates a new publisher with default configuration
-func NewPublisher(url string) (*Publisher, error) {
-	config := PublisherConfig{
-		ConnectionConfig:    DefaultConnectionConfig(url),
-		Persistent:          true,
-		Mandatory:           false,
-		Immediate:           false,
-		ConfirmationTimeout: time.Second * 5,
-		ShutdownTimeout:     time.Second * 15, // 15 second timeout for graceful shutdown
-	}
-	config.ConnectionName = "go-rabbitmq-publisher"
+// NewPublisher creates a new publisher using environment configuration
+// Set RABBITMQ_* environment variables or defaults will be used
+func NewPublisher() (*Publisher, error) {
+	envConfig, err := LoadFromEnv()
+	if err != nil {
+		emit.Warn.StructuredFields("Failed to load environment config, using defaults",
+			emit.ZString("error", err.Error()))
 
+		// Fallback to localhost defaults if environment loading fails
+		config := PublisherConfig{
+			ConnectionConfig:    DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"),
+			Persistent:          true,
+			Mandatory:           false,
+			Immediate:           false,
+			ConfirmationTimeout: time.Second * 5,
+			ShutdownTimeout:     time.Second * 15,
+		}
+		config.ConnectionName = "go-rabbitmq-publisher"
+		return NewPublisherWithConfig(config)
+	}
+
+	config := envConfig.ToPublisherConfig()
+	return NewPublisherWithConfig(config)
+}
+
+// NewPublisherWithPrefix creates a new publisher using environment configuration with custom prefix
+// Example: NewPublisherWithPrefix("MYAPP_") looks for MYAPP_RABBITMQ_HOST, etc.
+func NewPublisherWithPrefix(prefix string) (*Publisher, error) {
+	envConfig, err := LoadFromEnvWithPrefix(prefix)
+	if err != nil {
+		emit.Warn.StructuredFields("Failed to load environment config with prefix, using defaults",
+			emit.ZString("error", err.Error()),
+			emit.ZString("prefix", prefix))
+
+		// Fallback to localhost defaults if environment loading fails
+		config := PublisherConfig{
+			ConnectionConfig:    DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"),
+			Persistent:          true,
+			Mandatory:           false,
+			Immediate:           false,
+			ConfirmationTimeout: time.Second * 5,
+			ShutdownTimeout:     time.Second * 15,
+		}
+		config.ConnectionName = "go-rabbitmq-publisher"
+		return NewPublisherWithConfig(config)
+	}
+
+	config := envConfig.ToPublisherConfig()
 	return NewPublisherWithConfig(config)
 }
 
 // NewPublisherWithConfig creates a new publisher with custom configuration
 func NewPublisherWithConfig(config PublisherConfig) (*Publisher, error) {
-	emit.Info.StructuredFields("Creating RabbitMQ publisher",
-		emit.ZString("connection_name", config.ConnectionName),
-		emit.ZString("default_exchange", config.DefaultExchange),
-		emit.ZBool("persistent", config.Persistent))
-
 	conn, err := NewConnection(config.ConnectionConfig)
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create publisher connection",
-			emit.ZString("error", err.Error()),
-			emit.ZString("connection_name", config.ConnectionName))
+		emit.Error.StructuredFields("Failed to create connection for publisher",
+			emit.ZString("error", err.Error()))
 		return nil, fmt.Errorf("failed to create connection: %w", err)
+	}
+
+	// Set defaults if not provided
+	if config.ConfirmationTimeout == 0 {
+		config.ConfirmationTimeout = 5 * time.Second
+	}
+	if config.ShutdownTimeout == 0 {
+		config.ShutdownTimeout = 15 * time.Second
 	}
 
 	publisher := &Publisher{
@@ -90,8 +128,12 @@ func NewPublisherWithConfig(config PublisherConfig) (*Publisher, error) {
 		inFlight: NewInFlightTracker(),
 	}
 
-	emit.Info.StructuredFields("RabbitMQ publisher created successfully",
-		emit.ZString("connection_name", config.ConnectionName))
+	emit.Info.StructuredFields("Publisher created successfully with custom config",
+		emit.ZString("connection_name", config.ConnectionName),
+		emit.ZString("default_exchange", config.DefaultExchange),
+		emit.ZBool("persistent", config.Persistent),
+		emit.ZDuration("confirmation_timeout", config.ConfirmationTimeout),
+		emit.ZDuration("shutdown_timeout", config.ShutdownTimeout))
 
 	return publisher, nil
 }
