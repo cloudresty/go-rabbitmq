@@ -35,35 +35,42 @@ type ShutdownConfig struct {
 
 // DefaultShutdownConfig returns sensible default shutdown configuration
 func DefaultShutdownConfig() ShutdownConfig {
+
 	return ShutdownConfig{
 		Timeout:           time.Second * 30, // Total shutdown timeout
 		SignalTimeout:     time.Second * 5,  // Grace period after signal
 		GracefulDrainTime: time.Second * 10, // Time for in-flight operations
 	}
+
 }
 
 // NewShutdownManager creates a new shutdown manager
 func NewShutdownManager(config ShutdownConfig) *ShutdownManager {
+
 	return &ShutdownManager{
 		components: make([]Closable, 0),
 		timeout:    config.Timeout,
 		done:       make(chan struct{}),
 		inFlight:   NewInFlightTracker(),
 	}
+
 }
 
 // Register adds a component to be managed during shutdown
 func (sm *ShutdownManager) Register(component Closable) {
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.components = append(sm.components, component)
 
 	emit.Debug.StructuredFields("Component registered for graceful shutdown",
 		emit.ZInt("total_components", len(sm.components)))
+
 }
 
 // SetupSignalHandler sets up signal handling for graceful shutdown
 func (sm *ShutdownManager) SetupSignalHandler() <-chan os.Signal {
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -75,10 +82,12 @@ func (sm *ShutdownManager) SetupSignalHandler() <-chan os.Signal {
 	}()
 
 	return sigChan
+
 }
 
 // Shutdown performs graceful shutdown of all registered components
 func (sm *ShutdownManager) Shutdown() {
+
 	sm.once.Do(func() {
 		emit.Info.StructuredFields("Starting graceful shutdown",
 			emit.ZDuration("timeout", sm.timeout),
@@ -107,10 +116,12 @@ func (sm *ShutdownManager) Shutdown() {
 
 		close(sm.done)
 	})
+
 }
 
 // shutdownComponents shuts down all registered components
 func (sm *ShutdownManager) shutdownComponents() {
+
 	sm.mu.RLock()
 	components := make([]Closable, len(sm.components))
 	copy(components, sm.components)
@@ -163,31 +174,38 @@ func (sm *ShutdownManager) shutdownComponents() {
 
 	// Wait for in-flight operations to complete
 	_ = sm.inFlight.CloseWithTimeout(sm.timeout) // Ignore error during shutdown
+
 }
 
 // Wait blocks until shutdown is complete
 func (sm *ShutdownManager) Wait() {
+
 	<-sm.done
+
 }
 
 // WaitWithContext blocks until shutdown is complete or context is cancelled
 func (sm *ShutdownManager) WaitWithContext(ctx context.Context) error {
+
 	select {
 	case <-sm.done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+
 }
 
 // IsShutdown returns true if shutdown has been initiated
 func (sm *ShutdownManager) IsShutdown() bool {
+
 	select {
 	case <-sm.done:
 		return true
 	default:
 		return false
 	}
+
 }
 
 // InFlightTracker tracks in-flight operations for graceful shutdown
@@ -199,11 +217,14 @@ type InFlightTracker struct {
 
 // NewInFlightTracker creates a new in-flight operations tracker
 func NewInFlightTracker() *InFlightTracker {
+
 	return &InFlightTracker{}
+
 }
 
 // Start marks the beginning of an operation
 func (ift *InFlightTracker) Start() bool {
+
 	ift.mu.RLock()
 	defer ift.mu.RUnlock()
 
@@ -213,15 +234,19 @@ func (ift *InFlightTracker) Start() bool {
 
 	ift.wg.Add(1)
 	return true
+
 }
 
 // Done marks the completion of an operation
 func (ift *InFlightTracker) Done() {
+
 	ift.wg.Done()
+
 }
 
 // Close prevents new operations and waits for existing ones to complete
 func (ift *InFlightTracker) Close() error {
+
 	ift.mu.Lock()
 	ift.closed = true
 	ift.mu.Unlock()
@@ -231,10 +256,12 @@ func (ift *InFlightTracker) Close() error {
 	emit.Debug.Msg("All in-flight operations completed")
 
 	return nil
+
 }
 
 // CloseWithTimeout waits for in-flight operations with a timeout
 func (ift *InFlightTracker) CloseWithTimeout(timeout time.Duration) error {
+
 	ift.mu.Lock()
 	ift.closed = true
 	ift.mu.Unlock()
@@ -254,11 +281,14 @@ func (ift *InFlightTracker) CloseWithTimeout(timeout time.Duration) error {
 			emit.ZDuration("timeout", timeout))
 		return context.DeadlineExceeded
 	}
+
 }
 
 // IsClosed returns true if the tracker is closed
 func (ift *InFlightTracker) IsClosed() bool {
+
 	ift.mu.RLock()
 	defer ift.mu.RUnlock()
 	return ift.closed
+
 }

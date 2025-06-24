@@ -49,22 +49,62 @@ type MessageHandler func(ctx context.Context, message []byte) error
 // DeliveryHandler is a function type for handling raw AMQP deliveries
 type DeliveryHandler func(ctx context.Context, delivery amqp.Delivery) error
 
-// NewConsumer creates a new consumer with default configuration
-func NewConsumer(url string) (*Consumer, error) {
-	config := ConsumerConfig{
-		ConnectionConfig: DefaultConnectionConfig(url),
-		AutoAck:          false,
-		Exclusive:        false,
-		NoLocal:          false,
-		NoWait:           false,
-		PrefetchCount:    1,
-		PrefetchSize:     0,
-		PrefetchGlobal:   false,
-		MessageTimeout:   time.Minute * 5,  // 5 minute timeout for processing individual messages
-		ShutdownTimeout:  time.Second * 30, // 30 second timeout for graceful shutdown
-	}
-	config.ConnectionName = "go-rabbitmq-consumer"
+// NewConsumer creates a new consumer using environment configuration
+// Set RABBITMQ_* environment variables or defaults will be used
+func NewConsumer() (*Consumer, error) {
+	envConfig, err := LoadFromEnv()
+	if err != nil {
+		emit.Warn.StructuredFields("Failed to load environment config, using defaults",
+			emit.ZString("error", err.Error()))
 
+		// Fallback to localhost defaults if environment loading fails
+		config := ConsumerConfig{
+			ConnectionConfig: DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"),
+			AutoAck:          false,
+			Exclusive:        false,
+			NoLocal:          false,
+			NoWait:           false,
+			PrefetchCount:    1,
+			PrefetchSize:     0,
+			PrefetchGlobal:   false,
+			MessageTimeout:   time.Minute * 5,
+			ShutdownTimeout:  time.Second * 30,
+		}
+		config.ConnectionName = "go-rabbitmq-consumer"
+		return NewConsumerWithConfig(config)
+	}
+
+	config := envConfig.ToConsumerConfig()
+	return NewConsumerWithConfig(config)
+}
+
+// NewConsumerWithPrefix creates a new consumer using environment configuration with custom prefix
+// Example: NewConsumerWithPrefix("MYAPP_") looks for MYAPP_RABBITMQ_HOST, etc.
+func NewConsumerWithPrefix(prefix string) (*Consumer, error) {
+	envConfig, err := LoadFromEnvWithPrefix(prefix)
+	if err != nil {
+		emit.Warn.StructuredFields("Failed to load environment config with prefix, using defaults",
+			emit.ZString("error", err.Error()),
+			emit.ZString("prefix", prefix))
+
+		// Fallback to localhost defaults if environment loading fails
+		config := ConsumerConfig{
+			ConnectionConfig: DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"),
+			AutoAck:          false,
+			Exclusive:        false,
+			NoLocal:          false,
+			NoWait:           false,
+			PrefetchCount:    1,
+			PrefetchSize:     0,
+			PrefetchGlobal:   false,
+			MessageTimeout:   time.Minute * 5,
+			ShutdownTimeout:  time.Second * 30,
+		}
+		config.ConnectionName = "go-rabbitmq-consumer"
+		return NewConsumerWithConfig(config)
+	}
+
+	config := envConfig.ToConsumerConfig()
 	return NewConsumerWithConfig(config)
 }
 

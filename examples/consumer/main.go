@@ -20,16 +20,22 @@ type OrderMessage struct {
 }
 
 func main() {
-	// Create a consumer
-	consumer, err := rabbitmq.NewConsumer("amqp://guest:guest@localhost:5672/")
+	emit.Info.Msg("Starting consumer example with environment configuration")
+
+	// Create a consumer from environment variables
+	// Set RABBITMQ_HOST, RABBITMQ_USERNAME, RABBITMQ_PASSWORD etc., or use defaults
+	consumer, err := rabbitmq.NewConsumer()
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create consumer",
-			emit.ZString("error", err.Error()))
+		emit.Error.StructuredFields("Failed to create consumer from environment",
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables or use defaults"))
 		os.Exit(1)
 	}
 	defer func() {
 		_ = consumer.Close() // Ignore error during cleanup
 	}()
+
+	emit.Info.Msg("Consumer created successfully from environment configuration")
 
 	// Declare queue
 	queue, err := consumer.DeclareQueue("order-processing", true, false, false, false, nil)

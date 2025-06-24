@@ -12,24 +12,32 @@ import (
 
 // Event represents a system event
 type Event struct {
-	ID        string                 `json:"id"`
-	Type      string                 `json:"type"`
-	Source    string                 `json:"source"`
-	Data      map[string]interface{} `json:"data"`
-	Timestamp time.Time              `json:"timestamp"`
+	ID        string         `json:"id"`
+	Type      string         `json:"type"`
+	Source    string         `json:"source"`
+	Data      map[string]any `json:"data"`
+	Timestamp time.Time      `json:"timestamp"`
 }
 
 func main() {
-	// Create connection
-	conn, err := rabbitmq.NewConnection(rabbitmq.DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"))
+	emit.Info.Msg("Starting advanced example with environment configuration")
+
+	// Create publisher using environment configuration
+	publisher, err := rabbitmq.NewPublisher()
 	if err != nil {
-		emit.Error.StructuredFields("Failed to create connection",
-			emit.ZString("error", err.Error()))
+		emit.Error.StructuredFields("Failed to create publisher",
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables or defaults will be used"))
 		os.Exit(1)
 	}
 	defer func() {
-		_ = conn.Close() // Ignore error during cleanup
+		_ = publisher.Close() // Ignore error during cleanup
 	}()
+
+	emit.Info.Msg("Publisher created successfully using environment configuration")
+
+	// Get the connection for topology setup
+	conn := publisher.GetConnection()
 
 	// Setup topology
 	err = rabbitmq.SetupTopology(conn,
@@ -81,26 +89,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create publisher with custom config
-	publisherConfig := rabbitmq.PublisherConfig{
-		ConnectionConfig: rabbitmq.DefaultConnectionConfig("amqp://guest:guest@localhost:5672/"),
-		DefaultExchange:  "events",
-		Persistent:       true,
-		Mandatory:        false,
-	}
-	publisherConfig.ConnectionName = "event-publisher"
-
-	publisher, err := rabbitmq.NewPublisherWithConfig(publisherConfig)
-	if err != nil {
-		emit.Error.StructuredFields("Failed to create publisher",
-			emit.ZString("error", err.Error()))
-		os.Exit(1)
-	}
-	defer func() {
-		_ = publisher.Close() // Ignore error during cleanup
-	}()
-
-	// Publish various events
+	// Publish various events directly using our publisher
 	events := []Event{
 		{
 			ID:     "evt-001",

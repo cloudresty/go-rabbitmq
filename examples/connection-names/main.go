@@ -2,94 +2,56 @@ package main
 
 import (
 	"context"
-	"os"
-	"time"
 
 	"github.com/cloudresty/emit"
 	"github.com/cloudresty/go-rabbitmq"
 )
 
 func main() {
-	// Example 1: Publisher with custom connection name and auto-reconnection
-	publisherConfig := rabbitmq.PublisherConfig{
-		ConnectionConfig: rabbitmq.ConnectionConfig{
-			URL:                  "amqp://guest:guest@localhost:5672/",
-			RetryAttempts:        3,
-			RetryDelay:           time.Second * 2,
-			Heartbeat:            time.Second * 10,
-			ConnectionName:       "order-service-publisher", // Custom connection name
-			AutoReconnect:        true,                      // Enable auto-reconnection
-			ReconnectDelay:       time.Second * 5,           // Wait 5s between reconnection attempts
-			MaxReconnectAttempts: 0,                         // Unlimited reconnection attempts
-		},
-		DefaultExchange: "orders",
-		Persistent:      true,
-	}
+	emit.Info.Msg("Starting simplified connection example")
 
-	publisher, err := rabbitmq.NewPublisherWithConfig(publisherConfig)
+	// Create publisher using environment configuration
+	publisher, err := rabbitmq.NewPublisher()
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create publisher",
-			emit.ZString("error", err.Error()))
-		os.Exit(1)
+			emit.ZString("error", err.Error()),
+			emit.ZString("hint", "Set RABBITMQ_* environment variables"))
+		return
 	}
 	defer func() {
-		_ = publisher.Close() // Ignore error during cleanup
+		_ = publisher.Close()
 	}()
 
-	// Example 2: Consumer with custom connection name and auto-reconnection
-	consumerConfig := rabbitmq.ConsumerConfig{
-		ConnectionConfig: rabbitmq.ConnectionConfig{
-			URL:                  "amqp://guest:guest@localhost:5672/",
-			RetryAttempts:        3,
-			RetryDelay:           time.Second * 2,
-			Heartbeat:            time.Second * 10,
-			ConnectionName:       "order-service-consumer", // Custom connection name
-			AutoReconnect:        true,                     // Enable auto-reconnection
-			ReconnectDelay:       time.Second * 5,          // Wait 5s between reconnection attempts
-			MaxReconnectAttempts: 10,                       // Max 10 reconnection attempts
-		},
-		AutoAck:       false,
-		PrefetchCount: 5,
-	}
+	emit.Info.Msg("Publisher created successfully")
 
-	consumer, err := rabbitmq.NewConsumerWithConfig(consumerConfig)
+	// Create consumer using environment configuration
+	consumer, err := rabbitmq.NewConsumer()
 	if err != nil {
 		emit.Error.StructuredFields("Failed to create consumer",
 			emit.ZString("error", err.Error()))
-		os.Exit(1)
+		return
 	}
 	defer func() {
-		_ = consumer.Close() // Ignore error during cleanup
+		_ = consumer.Close()
 	}()
 
+	emit.Info.Msg("Consumer created successfully")
+
 	// Publish a test message
-	err = publisher.Publish(context.Background(), rabbitmq.PublishConfig{
-		Exchange:   "orders",
-		RoutingKey: "order.created",
-		Message:    []byte(`{"order_id": "123", "amount": 99.99}`),
+	ctx := context.Background()
+	err = publisher.Publish(ctx, rabbitmq.PublishConfig{
+		Exchange:    "orders",
+		RoutingKey:  "order.created",
+		Message:     []byte(`{"order_id": "123", "status": "created"}`),
+		ContentType: "application/json",
 	})
+
 	if err != nil {
 		emit.Error.StructuredFields("Failed to publish message",
 			emit.ZString("error", err.Error()))
-		os.Exit(1)
+	} else {
+		emit.Info.Msg("Message published successfully")
 	}
 
-	emit.Info.StructuredFields("Published message with custom connection name",
-		emit.ZString("connection_name", publisherConfig.ConnectionName))
-
-	// Start consuming with custom connection name
-	err = consumer.Consume(context.Background(), rabbitmq.ConsumeConfig{
-		Queue: "order-processing",
-		Handler: func(ctx context.Context, message []byte) error {
-			emit.Info.StructuredFields("Received order",
-				emit.ZString("message", string(message)),
-				emit.ZString("connection_name", consumerConfig.ConnectionName))
-			return nil
-		},
-	})
-	if err != nil {
-		emit.Error.StructuredFields("Consumer error",
-			emit.ZString("error", err.Error()))
-		os.Exit(1)
-	}
+	emit.Info.Msg("Connection example completed!")
 }

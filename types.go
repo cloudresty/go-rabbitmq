@@ -73,6 +73,7 @@ type QueueConfig struct {
 
 // DefaultQuorumQueueConfig returns a production-ready quorum queue configuration
 func DefaultQuorumQueueConfig(name string) QueueConfig {
+
 	return QueueConfig{
 		Name:              name,
 		Durable:           true,
@@ -93,10 +94,12 @@ func DefaultQuorumQueueConfig(name string) QueueConfig {
 		DLQMaxLength:  0,                       // Unlimited
 		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
+
 }
 
 // DefaultHAQueueConfig returns a production-ready HA classic queue configuration
 func DefaultHAQueueConfig(name string) QueueConfig {
+
 	return QueueConfig{
 		Name:              name,
 		Durable:           true,
@@ -117,10 +120,12 @@ func DefaultHAQueueConfig(name string) QueueConfig {
 		DLQMaxLength:  0,                       // Unlimited
 		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
+
 }
 
 // DefaultClassicQueueConfig returns a basic durable classic queue configuration
 func DefaultClassicQueueConfig(name string) QueueConfig {
+
 	return QueueConfig{
 		Name:              name,
 		Durable:           true,
@@ -141,16 +146,16 @@ func DefaultClassicQueueConfig(name string) QueueConfig {
 		DLQMaxLength:  0,                       // Unlimited
 		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
+
 }
 
 // ToArguments converts the QueueConfig to RabbitMQ queue arguments
 func (q *QueueConfig) ToArguments() map[string]any {
+
 	args := make(map[string]any)
 
 	// Copy existing arguments
-	for k, v := range q.Arguments {
-		args[k] = v
-	}
+	maps.Copy(args, q.Arguments)
 
 	// Set queue type
 	switch q.QueueType {
@@ -200,10 +205,12 @@ func (q *QueueConfig) ToArguments() map[string]any {
 	}
 
 	return args
+
 }
 
 // generateMessageID creates a unique message ID using ULID
 func generateMessageID() string {
+
 	// Generate a new ULID which provides:
 	// - Temporal ordering (time-sortable)
 	// - Global uniqueness
@@ -219,6 +226,7 @@ func generateMessageID() string {
 		return fmt.Sprintf("msg-%d", timestamp)
 	}
 	return ulidStr
+
 }
 
 // Message represents a message with metadata
@@ -246,6 +254,7 @@ type Message struct {
 
 // NewMessage creates a new Message with auto-generated ID and timestamp
 func NewMessage(body []byte) *Message {
+
 	return &Message{
 		Body:        body,
 		ContentType: ContentTypeJSON,
@@ -254,10 +263,12 @@ func NewMessage(body []byte) *Message {
 		Timestamp:   time.Now().Unix(),
 		Headers:     make(map[string]any),
 	}
+
 }
 
 // NewMessageWithID creates a new Message with a specific ID
 func NewMessageWithID(body []byte, messageID string) *Message {
+
 	return &Message{
 		Body:        body,
 		ContentType: ContentTypeJSON,
@@ -266,80 +277,103 @@ func NewMessageWithID(body []byte, messageID string) *Message {
 		Timestamp:   time.Now().Unix(),
 		Headers:     make(map[string]any),
 	}
+
 }
 
 // NewJSONMessage creates a new Message for JSON content
 func NewJSONMessage(body []byte) *Message {
+
 	msg := NewMessage(body)
 	msg.ContentType = ContentTypeJSON
 	return msg
+
 }
 
 // NewTextMessage creates a new Message for plain text content
 func NewTextMessage(body []byte) *Message {
+
 	msg := NewMessage(body)
 	msg.ContentType = ContentTypeText
 	return msg
+
 }
 
 // WithCorrelationID sets the correlation ID for request-response patterns
 func (m *Message) WithCorrelationID(correlationID string) *Message {
+
 	m.CorrelationID = correlationID
 	return m
+
 }
 
 // WithReplyTo sets the reply queue for RPC patterns
 func (m *Message) WithReplyTo(replyTo string) *Message {
+
 	m.ReplyTo = replyTo
 	return m
+
 }
 
 // WithType sets the message type/schema identifier
 func (m *Message) WithType(messageType string) *Message {
+
 	m.Type = messageType
 	return m
+
 }
 
 // WithAppID sets the application ID
 func (m *Message) WithAppID(appID string) *Message {
+
 	m.AppID = appID
 	return m
+
 }
 
 // WithUserID sets the user ID (if authenticated)
 func (m *Message) WithUserID(userID string) *Message {
+
 	m.UserID = userID
 	return m
+
 }
 
 // WithExpiration sets message expiration in duration
 func (m *Message) WithExpiration(expiration time.Duration) *Message {
+
 	m.Expiration = fmt.Sprintf("%.0f", expiration.Seconds()*1000)
 	return m
+
 }
 
 // WithPriority sets message priority (0-255, higher = more priority)
 func (m *Message) WithPriority(priority uint8) *Message {
+
 	m.Priority = priority
 	return m
+
 }
 
 // WithHeader adds a custom header to the message
 func (m *Message) WithHeader(key string, value any) *Message {
+
 	if m.Headers == nil {
 		m.Headers = make(map[string]any)
 	}
 	m.Headers[key] = value
 	return m
+
 }
 
 // WithHeaders adds multiple custom headers to the message
 func (m *Message) WithHeaders(headers map[string]any) *Message {
+
 	if m.Headers == nil {
 		m.Headers = make(map[string]any)
 	}
 	maps.Copy(m.Headers, headers)
 	return m
+
 }
 
 // BindingConfig holds configuration for binding a queue to an exchange
@@ -353,6 +387,7 @@ type BindingConfig struct {
 
 // SetupTopology creates exchanges, queues, and bindings
 func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueConfig, bindings []BindingConfig) error {
+
 	if !conn.IsConnected() {
 		return fmt.Errorf("connection is not established")
 	}
@@ -385,10 +420,12 @@ func SetupTopology(conn *Connection, exchanges []ExchangeConfig, queues []QueueC
 	}
 
 	return nil
+
 }
 
 // declareExchanges declares all the main exchanges
 func declareExchanges(channel *amqp.Channel, exchanges []ExchangeConfig) error {
+
 	for _, exchange := range exchanges {
 		err := channel.ExchangeDeclare(
 			exchange.Name,
@@ -408,10 +445,12 @@ func declareExchanges(channel *amqp.Channel, exchanges []ExchangeConfig) error {
 			emit.ZString("exchange_type", string(exchange.Type)))
 	}
 	return nil
+
 }
 
 // declareDeadLetterExchanges declares dead letter exchanges for queues that need them
 func declareDeadLetterExchanges(channel *amqp.Channel, queues []QueueConfig) error {
+
 	dlxMap := make(map[string]bool) // Track created DLXs to avoid duplicates
 	for _, queue := range queues {
 		if queue.AutoCreateDLX {
@@ -441,10 +480,12 @@ func declareDeadLetterExchanges(channel *amqp.Channel, queues []QueueConfig) err
 		}
 	}
 	return nil
+
 }
 
 // declareDeadLetterQueues declares dead letter queues
 func declareDeadLetterQueues(channel *amqp.Channel, queues []QueueConfig) error {
+
 	dlqMap := make(map[string]bool) // Track created DLQs to avoid duplicates
 	for _, queue := range queues {
 		if queue.AutoCreateDLX {
@@ -481,10 +522,12 @@ func declareDeadLetterQueues(channel *amqp.Channel, queues []QueueConfig) error 
 		}
 	}
 	return nil
+
 }
 
 // bindDeadLetterQueue binds a dead letter queue to its exchange
 func bindDeadLetterQueue(channel *amqp.Channel, queue *QueueConfig, dlqName string) error {
+
 	dlxName := queue.GetDLXName()
 	routingKey := queue.Name + queue.DLQSuffix
 	if queue.DeadLetterRoutingKey != "" {
@@ -507,10 +550,12 @@ func bindDeadLetterQueue(channel *amqp.Channel, queue *QueueConfig, dlqName stri
 		emit.ZString("dlx_name", dlxName),
 		emit.ZString("routing_key", routingKey))
 	return nil
+
 }
 
 // declareMainQueues declares all the main queues
 func declareMainQueues(channel *amqp.Channel, queues []QueueConfig) error {
+
 	for _, queue := range queues {
 		// Convert queue config to arguments (this will include DLX settings)
 		args := queue.ToArguments()
@@ -545,10 +590,12 @@ func declareMainQueues(channel *amqp.Channel, queues []QueueConfig) error {
 			emit.ZString("dlx_name", queue.GetDLXName()))
 	}
 	return nil
+
 }
 
 // createBindings creates all the queue bindings
 func createBindings(channel *amqp.Channel, bindings []BindingConfig) error {
+
 	for _, binding := range bindings {
 		err := channel.QueueBind(
 			binding.QueueName,
@@ -563,10 +610,12 @@ func createBindings(channel *amqp.Channel, bindings []BindingConfig) error {
 		}
 	}
 	return nil
+
 }
 
 // ToPublishing converts a Message to amqp.Publishing
 func (m *Message) ToPublishing() amqp.Publishing {
+
 	deliveryMode := uint8(1) // Non-persistent
 	if m.Persistent {
 		deliveryMode = uint8(2) // Persistent
@@ -598,6 +647,7 @@ func (m *Message) ToPublishing() amqp.Publishing {
 		Expiration:    m.Expiration,
 		Priority:      m.Priority,
 	}
+
 }
 
 // DeliveryInfo contains information about a delivered message
@@ -643,6 +693,7 @@ func ExtractDeliveryInfo(delivery *amqp.Delivery) DeliveryInfo {
 
 // DeclareStandardTopology sets up a standard topology with work queues
 func DeclareStandardTopology(conn *Connection, exchangeName, queueName string) error {
+
 	exchanges := []ExchangeConfig{
 		{
 			Name:       exchangeName,
@@ -680,45 +731,56 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+
 	if e.Cause != nil {
 		return fmt.Sprintf("%s: %s (caused by: %v)", e.Type, e.Message, e.Cause)
 	}
 	return fmt.Sprintf("%s: %s", e.Type, e.Message)
+
 }
 
 func (e *Error) Unwrap() error {
+
 	return e.Cause
+
 }
 
 // NewConnectionError creates a new connection error
 func NewConnectionError(message string, cause error) *Error {
+
 	return &Error{
 		Type:    "ConnectionError",
 		Message: message,
 		Cause:   cause,
 	}
+
 }
 
 // NewPublishError creates a new publish error
 func NewPublishError(message string, cause error) *Error {
+
 	return &Error{
 		Type:    "PublishError",
 		Message: message,
 		Cause:   cause,
 	}
+
 }
 
 // NewConsumeError creates a new consume error
 func NewConsumeError(message string, cause error) *Error {
+
 	return &Error{
 		Type:    "ConsumeError",
 		Message: message,
 		Cause:   cause,
 	}
+
 }
 
 // GetDLXName returns the dead letter exchange name for this queue config
 func (q *QueueConfig) GetDLXName() string {
+
 	if q.DeadLetterExchange != "" {
 		return q.DeadLetterExchange
 	}
@@ -726,18 +788,22 @@ func (q *QueueConfig) GetDLXName() string {
 		return q.Name + q.DLXSuffix
 	}
 	return ""
+
 }
 
 // GetDLQName returns the dead letter queue name for this queue config
 func (q *QueueConfig) GetDLQName() string {
+
 	if q.AutoCreateDLX {
 		return q.Name + q.DLQSuffix
 	}
 	return ""
+
 }
 
 // GetDLQConfig returns a QueueConfig for the dead letter queue
 func (q *QueueConfig) GetDLQConfig() QueueConfig {
+
 	if !q.AutoCreateDLX {
 		return QueueConfig{} // Return empty config if DLX is disabled
 	}
@@ -761,10 +827,12 @@ func (q *QueueConfig) GetDLQConfig() QueueConfig {
 	}
 
 	return dlqConfig
+
 }
 
 // GetDLXConfig returns an ExchangeConfig for the dead letter exchange
 func (q *QueueConfig) GetDLXConfig() ExchangeConfig {
+
 	if !q.AutoCreateDLX {
 		return ExchangeConfig{} // Return empty config if DLX is disabled
 	}
@@ -778,29 +846,36 @@ func (q *QueueConfig) GetDLXConfig() ExchangeConfig {
 		NoWait:     q.NoWait,
 		Arguments:  make(map[string]any),
 	}
+
 }
 
 // WithoutDeadLetter disables automatic dead letter infrastructure creation
 func (q *QueueConfig) WithoutDeadLetter() *QueueConfig {
+
 	q.AutoCreateDLX = false
 	q.DeadLetterExchange = ""
 	q.DeadLetterRoutingKey = ""
 	return q
+
 }
 
 // WithDeadLetter enables and configures dead letter infrastructure
 func (q *QueueConfig) WithDeadLetter(dlxSuffix, dlqSuffix string, dlqTTLDays int) *QueueConfig {
+
 	q.AutoCreateDLX = true
 	q.DLXSuffix = dlxSuffix
 	q.DLQSuffix = dlqSuffix
 	q.DLQMessageTTL = dlqTTLDays * 24 * 60 * 60 * 1000 // Convert days to milliseconds
 	return q
+
 }
 
 // WithCustomDeadLetter configures a custom dead letter exchange (disables auto-creation)
 func (q *QueueConfig) WithCustomDeadLetter(dlxName, routingKey string) *QueueConfig {
+
 	q.AutoCreateDLX = false
 	q.DeadLetterExchange = dlxName
 	q.DeadLetterRoutingKey = routingKey
 	return q
+
 }
