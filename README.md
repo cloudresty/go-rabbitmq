@@ -1,6 +1,6 @@
 # Go RabbitMQ
 
-[Home](README.md) /
+[Home](README.md) &nbsp;/
 
 &nbsp;
 
@@ -189,6 +189,10 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 3. Add tests for your changes
 4. Ensure all tests pass
 5. Submit a pull request
+
+## Security
+
+If you discover a security vulnerability, please report it via email to [security@cloudresty.com](mailto:security@cloudresty.com).
 
 &nbsp;
 
