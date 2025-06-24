@@ -205,9 +205,9 @@ func main() {
 		emit.ZInt("message_loss", finalPublished-finalConsumed))
 
 	if finalPublished == finalConsumed {
-		emit.Info.Msg("✅ No message loss detected during reconnection test")
+		emit.Info.Msg("No message loss detected during reconnection test")
 	} else {
-		emit.Warn.StructuredFields("⚠️ Message loss detected",
+		emit.Warn.StructuredFields("Message loss detected",
 			emit.ZInt("lost_messages", finalPublished-finalConsumed))
 	}
 
