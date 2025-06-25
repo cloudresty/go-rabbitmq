@@ -30,6 +30,8 @@ A modern, production-ready Go package for RabbitMQ operations with environment-f
 - [Contributing](#contributing)
 - [License](#license)
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ## Key Features
@@ -41,9 +43,13 @@ A modern, production-ready Go package for RabbitMQ operations with environment-f
 - **High Performance**: Zero-allocation logging, optimized for throughput
 - **Fully Tested**: Comprehensive test coverage with CI/CD pipeline
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ## Quick Start
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -52,6 +58,8 @@ A modern, production-ready Go package for RabbitMQ operations with environment-f
 ```bash
 go get github.com/cloudresty/go-rabbitmq
 ```
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -98,6 +106,8 @@ func main() {
 }
 ```
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ### Environment Configuration
@@ -111,6 +121,8 @@ export RABBITMQ_PASSWORD=guest
 export RABBITMQ_CONNECTION_NAME=my-service
 ```
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ## Documentation
@@ -123,11 +135,15 @@ export RABBITMQ_CONNECTION_NAME=my-service
 | [ULID Message IDs](docs/ulid-message-ids.md) | High-performance, database-optimized message identifiers |
 | [Examples](docs/examples.md) | Comprehensive examples and usage patterns |
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ## Why This Package?
 
 This package is designed for modern cloud-native applications that require robust, high-performance messaging solutions. It leverages the power of RabbitMQ while providing a developer-friendly API that integrates seamlessly with environment-based configurations.
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -135,11 +151,15 @@ This package is designed for modern cloud-native applications that require robus
 
 Perfect for modern cloud deployments with Docker, Kubernetes, and CI/CD pipelines. No more hardcoded connection strings.
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ### ULID Message IDs
 
 Get 6x faster message ID generation with better database performance compared to UUIDs. Natural time-ordering and collision resistance.
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -147,11 +167,15 @@ Get 6x faster message ID generation with better database performance compared to
 
 Built-in support for high availability, graceful shutdown, automatic reconnection, and comprehensive timeout controls.
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ### Performance Optimized
 
 Zero-allocation logging, efficient ULID generation, and optimized for high-throughput scenarios.
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -171,12 +195,16 @@ shutdownManager.Register(publisher, consumer)
 shutdownManager.Wait() // Blocks until SIGINT/SIGTERM
 ```
 
+🔝 [back to top](#go-rabbitmq)
+
 &nbsp;
 
 ## Requirements
 
 - Go 1.24+ (recommended)
 - RabbitMQ 4.0+ (recommended)
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
@@ -190,15 +218,23 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 4. Ensure all tests pass
 5. Submit a pull request
 
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
 ## Security
 
 If you discover a security vulnerability, please report it via email to [security@cloudresty.com](mailto:security@cloudresty.com).
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+
+🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
 

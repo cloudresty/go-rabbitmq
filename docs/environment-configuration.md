@@ -32,13 +32,88 @@ publisher, err := rabbitmq.NewPublisherWithConfig(envConfig.ToPublisherConfig())
 
 ## Custom Prefix
 
+For multi-service deployments or when you need to avoid environment variable conflicts, you can use custom prefixes. The prefix is prepended to the standard `RABBITMQ_*` variable names.
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### How Custom Prefixes Work
+
+When you specify a custom prefix like `MYAPP_`, the environment variable names become:
+
+| Standard Variable | With Prefix `MYAPP_` | With Prefix `PAYMENTS_` |
+|-------------------|---------------------|------------------------|
+| `RABBITMQ_HOST` | `MYAPP_RABBITMQ_HOST` | `PAYMENTS_RABBITMQ_HOST` |
+| `RABBITMQ_USERNAME` | `MYAPP_RABBITMQ_USERNAME` | `PAYMENTS_RABBITMQ_USERNAME` |
+| `RABBITMQ_PASSWORD` | `MYAPP_RABBITMQ_PASSWORD` | `PAYMENTS_RABBITMQ_PASSWORD` |
+| `RABBITMQ_PORT` | `MYAPP_RABBITMQ_PORT` | `PAYMENTS_RABBITMQ_PORT` |
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Usage Examples
+
 ```go
-// Use custom prefix (e.g., MYAPP_RABBITMQ_HOST instead of RABBITMQ_HOST)
+// Use custom prefix for environment loading
 publisher, err := rabbitmq.NewPublisherWithPrefix("MYAPP_")
 consumer, err := rabbitmq.NewConsumerWithPrefix("MYAPP_")
 
-// Load with custom prefix
+// Or load configuration first, then create instances
 envConfig, err := rabbitmq.LoadFromEnvWithPrefix("MYAPP_")
+if err != nil {
+    log.Fatal(err)
+}
+
+publisher, err := rabbitmq.NewPublisherWithConfig(envConfig.ToPublisherConfig())
+consumer, err := rabbitmq.NewConsumerWithConfig(envConfig.ToConsumerConfig())
+```
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Environment Variable Setup
+
+```bash
+# For MYAPP_ prefix
+export MYAPP_RABBITMQ_HOST=app-rabbitmq.internal
+export MYAPP_RABBITMQ_USERNAME=myapp_user
+export MYAPP_RABBITMQ_PASSWORD=myapp_secret
+export MYAPP_RABBITMQ_CONNECTION_NAME=myapp-service
+
+# For PAYMENTS_ prefix
+export PAYMENTS_RABBITMQ_HOST=payments-rabbitmq.internal
+export PAYMENTS_RABBITMQ_USERNAME=payments_user
+export PAYMENTS_RABBITMQ_PASSWORD=payments_secret
+export PAYMENTS_RABBITMQ_CONNECTION_NAME=payments-service
+```
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Multi-Service Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  user-service:
+    image: user-service:latest
+    environment:
+      USERS_RABBITMQ_HOST: rabbitmq
+      USERS_RABBITMQ_USERNAME: users_app
+      USERS_RABBITMQ_PASSWORD: users_secret
+      USERS_RABBITMQ_CONNECTION_NAME: user-service
+
+  payments-service:
+    image: payments-service:latest
+    environment:
+      PAYMENTS_RABBITMQ_HOST: rabbitmq
+      PAYMENTS_RABBITMQ_USERNAME: payments_app
+      PAYMENTS_RABBITMQ_PASSWORD: payments_secret
+      PAYMENTS_RABBITMQ_CONNECTION_NAME: payments-service
 ```
 
 🔝 [back to top](#environment-configuration)
@@ -191,6 +266,82 @@ amqpURL := envConfig.BuildAMQPURL()
 
 // Automatically builds: http://host:15672
 httpURL := envConfig.BuildHTTPURL()
+```
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+## Configuration Scenarios
+
+The package supports three distinct configuration scenarios, allowing for flexible deployment strategies:
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Scenario 1: All Defaults
+
+When no environment variables are set, the package automatically applies sensible defaults for local development:
+
+```go
+// No environment variables set
+publisher, err := rabbitmq.NewPublisher()
+// Results in: amqp://guest:guest@localhost:5672/ with default settings
+```
+
+**Default Values Applied:**
+
+- `RABBITMQ_HOST=localhost`
+- `RABBITMQ_USERNAME=guest`
+- `RABBITMQ_PASSWORD=guest`
+- `RABBITMQ_PORT=5672`
+- All other configuration uses package defaults
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Scenario 2: Mixed Environment and Defaults
+
+Set only the environment variables you need to customize, others fall back to defaults:
+
+```bash
+export RABBITMQ_HOST=production.rabbitmq.com
+export RABBITMQ_USERNAME=myapp
+export RABBITMQ_PASSWORD=secure_password
+# Other variables use defaults
+```
+
+```go
+publisher, err := rabbitmq.NewPublisher()
+// Results in: amqp://myapp:secure_password@production.rabbitmq.com:5672/
+// Port, vhost, timeouts, etc. use package defaults
+```
+
+🔝 [back to top](#environment-configuration)
+
+&nbsp;
+
+### Scenario 3: Full Environment Configuration
+
+For production deployments, set all required environment variables:
+
+```bash
+export RABBITMQ_HOST=prod-rabbit-cluster.internal
+export RABBITMQ_USERNAME=production_user
+export RABBITMQ_PASSWORD=production_secret
+export RABBITMQ_PORT=5672
+export RABBITMQ_VHOST=/production
+export RABBITMQ_CONNECTION_NAME=payment-service
+export RABBITMQ_HEARTBEAT=30s
+export RABBITMQ_PUBLISHER_PERSISTENT=true
+```
+
+```go
+publisher, err := rabbitmq.NewPublisher()
+// Results in: amqp://production_user:production_secret@prod-rabbit-cluster.internal:5672/production
+// All values loaded from environment variables
 ```
 
 🔝 [back to top](#environment-configuration)

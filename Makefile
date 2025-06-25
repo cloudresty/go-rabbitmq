@@ -49,7 +49,7 @@ docker-rabbitmq: ## Start RabbitMQ in Docker
 		-p 15672:15672 \
 		-e RABBITMQ_DEFAULT_USER=guest \
 		-e RABBITMQ_DEFAULT_PASS=guest \
-		rabbitmq:3-management
+		rabbitmq:4-management
 
 docker-stop: ## Stop RabbitMQ Docker container
 	docker stop rabbitmq-dev || true
