@@ -10,4 +10,4 @@ require github.com/cloudresty/emit v1.2.4
 
 require github.com/cloudresty/ulid v1.2.1
 
-require github.com/cloudresty/go-env v1.0.0
+require github.com/cloudresty/go-env v1.0.1
