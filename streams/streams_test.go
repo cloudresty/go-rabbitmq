@@ -34,21 +34,28 @@ func TestHandler_ContractImplementationPattern(t *testing.T) {
 	// Create streams handler using contract-implementation pattern
 	handler := NewHandler(client)
 
+	streamName := "test-stream"
+
+	// Delete the stream first to ensure we start with a clean slate
+	err = handler.DeleteStream(ctx, streamName)
+	if err != nil {
+		t.Logf("Stream might not exist yet (this is fine): %v", err)
+	}
+
 	// Test stream creation
 	streamConfig := rabbitmq.StreamConfig{
 		MaxAge:            24 * time.Hour,
 		MaxLengthMessages: 1000,
 	}
 
-	streamName := "test-stream"
 	err = handler.CreateStream(ctx, streamName, streamConfig)
 	if err != nil {
-		t.Logf("Stream might already exist: %v", err)
+		t.Fatalf("Failed to create stream: %v", err)
 	}
-
 	// Test publishing to stream
 	message := rabbitmq.NewMessage([]byte("test stream message"))
-	message.MessageID = "test-msg-1"
+	// Store the auto-generated ULID for comparison
+	expectedMessageID := message.MessageID
 
 	err = handler.PublishToStream(ctx, streamName, message)
 	if err != nil {
@@ -72,15 +79,18 @@ func TestHandler_ContractImplementationPattern(t *testing.T) {
 			t.Logf("Consume ended: %v", err)
 		}
 	}()
-
 	// Wait for message
 	select {
 	case delivery := <-received:
 		if string(delivery.Body) != "test stream message" {
 			t.Errorf("Expected 'test stream message', got %s", string(delivery.Body))
 		}
-		if delivery.MessageId != "test-msg-1" {
-			t.Errorf("Expected message ID 'test-msg-1', got %s", delivery.MessageId)
+
+		// Verify that message ID (ULID) is preserved through streams
+		if delivery.MessageId != expectedMessageID {
+			t.Errorf("Message ID not preserved! Expected '%s', got '%s'", expectedMessageID, delivery.MessageId)
+		} else {
+			t.Log("SUCCESS: Message ID properly preserved through RabbitMQ streams!")
 		}
 		t.Log("Successfully received message from stream")
 	case <-time.After(10 * time.Second):
