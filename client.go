@@ -160,7 +160,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Perform a passive queue declare on a built-in exchange to verify broker responsiveness
 	_, err = ch.QueueDeclarePassive("amq.direct", false, false, false, false, nil)
@@ -251,7 +251,7 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 	// Enable confirmation mode if requested
 	if config.ConfirmationEnabled {
 		if err := ch.Confirm(false); err != nil {
-			ch.Close() // Clean up channel on error
+			_ = ch.Close() // Clean up channel on error
 			return nil, fmt.Errorf("failed to enable confirm mode: %w", err)
 		}
 

@@ -68,7 +68,7 @@ func (h *Handler) PublishToStream(ctx context.Context, streamName string, messag
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Declare the stream if it doesn't exist
 	err = h.ensureStreamExists(ch, streamName)
@@ -101,7 +101,7 @@ func (h *Handler) ConsumeFromStream(ctx context.Context, streamName string, hand
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Declare the stream if it doesn't exist
 	err = h.ensureStreamExists(ch, streamName)
@@ -158,7 +158,7 @@ func (h *Handler) CreateStream(ctx context.Context, streamName string, config ra
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Prepare stream arguments
 	args := amqp.Table{
@@ -208,7 +208,7 @@ func (h *Handler) DeleteStream(ctx context.Context, streamName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Delete the stream
 	_, err = ch.QueueDelete(streamName, false, false, false)

@@ -312,7 +312,9 @@ func (a *AdminService) DeclareQueue(ctx context.Context, name string, opts ...Qu
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Declare queue
 	queue, err := ch.QueueDeclare(
@@ -360,7 +362,9 @@ func (a *AdminService) DeclareQuorumQueue(ctx context.Context, name string, opts
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Declare queue
 	queue, err := ch.QueueDeclare(
@@ -402,7 +406,9 @@ func (a *AdminService) DeclareExchange(ctx context.Context, name string, kind Ex
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Declare exchange
 	err = ch.ExchangeDeclare(
@@ -439,7 +445,9 @@ func (a *AdminService) DeleteQueue(ctx context.Context, name string, opts ...Del
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Delete queue
 	_, err = ch.QueueDelete(name, config.IfUnused, config.IfEmpty, config.NoWait)
@@ -467,7 +475,9 @@ func (a *AdminService) DeleteExchange(ctx context.Context, name string, opts ...
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Delete exchange
 	err = ch.ExchangeDelete(name, config.IfUnused, config.NoWait)
@@ -485,7 +495,9 @@ func (a *AdminService) PurgeQueue(ctx context.Context, name string) (int, error)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Purge queue
 	count, err := ch.QueuePurge(name, false)
@@ -503,10 +515,12 @@ func (a *AdminService) InspectQueue(ctx context.Context, name string) (*QueueInf
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() {
+		_ = ch.Close() // Ignore close error in defer
+	}()
 
 	// Inspect queue (passive declare to get info)
-	queue, err := ch.QueueInspect(name)
+	queue, err := ch.QueueDeclarePassive(name, false, false, false, false, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect queue %s: %w", name, err)
 	}
@@ -543,7 +557,7 @@ func (a *AdminService) ExchangeInfo(ctx context.Context, name string) (*Exchange
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Try to declare the exchange passively to check if it exists
 	err = ch.ExchangeDeclarePassive(name, "", false, false, false, false, nil)
@@ -576,7 +590,7 @@ func (a *AdminService) BindQueue(ctx context.Context, queue, exchange, routingKe
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Bind queue
 	err = ch.QueueBind(queue, routingKey, exchange, config.NoWait, amqp.Table(config.Arguments))
@@ -605,7 +619,7 @@ func (a *AdminService) UnbindQueue(ctx context.Context, queue, exchange, routing
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Unbind queue
 	err = ch.QueueUnbind(queue, routingKey, exchange, amqp.Table(config.Arguments))
@@ -623,7 +637,7 @@ func (a *AdminService) BindExchange(ctx context.Context, destination, source, ro
 	if err != nil {
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Bind exchange
 	err = ch.ExchangeBind(destination, routingKey, source, false, amqp.Table(args))

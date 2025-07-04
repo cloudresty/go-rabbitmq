@@ -27,7 +27,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Printf("Failed to close client: %v", err)
+		}
+	}()
 
 	// Example 1: Create AES-GCM encryptor using contract-implementation pattern
 	encryptor, err := encryption.NewAESGCM(encryptionKey)
@@ -45,7 +49,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		if err := publisher.Close(); err != nil {
+			log.Printf("Failed to close publisher: %v", err)
+		}
+	}()
 
 	// Example 3: Create consumer with automatic decryption
 	consumer, err := client.NewConsumer(
@@ -55,7 +63,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore close error in defer
+	}()
 
 	// Example 4: Publish sensitive messages (automatically encrypted)
 	ctx := context.Background()

@@ -32,7 +32,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close() // Ignore close error in defer
+	}()
 
 	// Test health check
 	if err := client.Ping(ctx); err != nil {
@@ -73,7 +75,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore close error in defer
+	}()
 
 	// Test message creation
 	testMsg := TestMessage{
@@ -105,7 +109,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create confirming publisher: %v", err)
 	}
-	defer confirmingPublisher.Close()
+	defer func() {
+		_ = confirmingPublisher.Close() // Ignore close error in defer
+	}()
 
 	err = confirmingPublisher.Publish(ctx, "", "test.key", message)
 	if err != nil {
@@ -119,7 +125,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore close error in defer
+	}()
 
 	// Test message consumption
 	received := make(chan TestMessage, 2)
@@ -174,7 +182,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close() // Ignore close error in defer
+	}()
 
 	if err := client.Ping(ctx); err != nil {
 		t.Skipf("RabbitMQ not available: %v", err)
@@ -202,7 +212,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore close error in defer
+	}()
 
 	// Create confirming publisher for testing confirmations
 	confirmingPublisher, err := client.NewPublisher(
@@ -212,7 +224,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create confirming publisher: %v", err)
 	}
-	defer confirmingPublisher.Close()
+	defer func() {
+		_ = confirmingPublisher.Close() // Ignore close error in defer
+	}()
 
 	// Prepare batch messages
 	messages := make([]PublishRequest, 5)

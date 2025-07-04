@@ -14,7 +14,9 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			_ = pool.Close() // Ignore close error in defer
+		}()
 
 		if pool.Size() != 3 {
 			t.Errorf("expected pool size 3, got %d", pool.Size())
@@ -42,7 +44,9 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			_ = pool.Close() // Ignore close error in defer
+		}()
 
 		// Wait a moment for health monitoring to start
 		time.Sleep(100 * time.Millisecond)
@@ -60,7 +64,11 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			if err := pool.Close(); err != nil {
+				t.Errorf("Failed to close pool: %v", err)
+			}
+		}()
 
 		stats := pool.GetStats()
 		if !stats.AutoRepairEnabled {
@@ -75,7 +83,11 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			if err := pool.Close(); err != nil {
+				t.Errorf("Failed to close pool: %v", err)
+			}
+		}()
 
 		stats := pool.GetStats()
 		if stats.HealthMonitoringEnabled {
@@ -91,7 +103,11 @@ func TestNew(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			if err := pool.Close(); err != nil {
+				t.Errorf("Failed to close pool: %v", err)
+			}
+		}()
 
 		if pool.Size() != 2 {
 			t.Errorf("expected pool size 2, got %d", pool.Size())
@@ -105,7 +121,11 @@ func TestGet(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			if err := pool.Close(); err != nil {
+				t.Errorf("Failed to close pool: %v", err)
+			}
+		}()
 
 		client, err := pool.Get()
 		if err != nil {
@@ -121,7 +141,11 @@ func TestGet(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer pool.Close()
+		defer func() {
+			if err := pool.Close(); err != nil {
+				t.Errorf("Failed to close pool: %v", err)
+			}
+		}()
 
 		// Get multiple clients and verify they're returned
 		clients := make([]*rabbitmq.Client, 10)
@@ -143,7 +167,9 @@ func TestGet(t *testing.T) {
 			t.Skip("RabbitMQ not available for testing")
 		}
 
-		pool.Close()
+		if err := pool.Close(); err != nil {
+			t.Errorf("Failed to close pool: %v", err)
+		}
 
 		client, err := pool.Get()
 		if err == nil {
@@ -160,7 +186,11 @@ func TestGetClientByIndex(t *testing.T) {
 	if err != nil {
 		t.Skip("RabbitMQ not available for testing")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	// Test valid indices
 	for i := range 3 {
@@ -185,7 +215,11 @@ func TestHealthCheck(t *testing.T) {
 	if err != nil {
 		t.Skip("RabbitMQ not available for testing")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	if err := pool.HealthCheck(ctx); err != nil {
@@ -201,7 +235,11 @@ func TestGetStats(t *testing.T) {
 	if err != nil {
 		t.Skip("RabbitMQ not available for testing")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	// Wait a moment for health monitoring to start
 	time.Sleep(100 * time.Millisecond)
@@ -251,7 +289,11 @@ func TestConcurrentAccess(t *testing.T) {
 	if err != nil {
 		t.Skip("RabbitMQ not available for testing")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	// Test concurrent access to Get()
 	done := make(chan bool, 10)
@@ -284,7 +326,11 @@ func BenchmarkGet(b *testing.B) {
 	if err != nil {
 		b.Skip("RabbitMQ not available for benchmarking")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			b.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -300,7 +346,11 @@ func BenchmarkGetClientByIndex(b *testing.B) {
 	if err != nil {
 		b.Skip("RabbitMQ not available for benchmarking")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			b.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -316,7 +366,11 @@ func BenchmarkGetStats(b *testing.B) {
 	if err != nil {
 		b.Skip("RabbitMQ not available for benchmarking")
 	}
-	defer pool.Close()
+	defer func() {
+		if err := pool.Close(); err != nil {
+			b.Errorf("Failed to close pool: %v", err)
+		}
+	}()
 
 	for b.Loop() {
 		stats := pool.GetStats()

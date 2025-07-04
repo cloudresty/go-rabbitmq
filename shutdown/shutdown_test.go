@@ -106,6 +106,7 @@ func TestNewShutdownManager(t *testing.T) {
 
 	if manager == nil {
 		t.Error("NewShutdownManager returned nil")
+		return
 	}
 
 	if manager.timeout != config.Timeout {

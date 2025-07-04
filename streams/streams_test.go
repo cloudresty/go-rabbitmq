@@ -25,7 +25,11 @@ func TestHandler_ContractImplementationPattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("Failed to close client: %v", err)
+		}
+	}()
 
 	// Create streams handler using contract-implementation pattern
 	handler := NewHandler(client)

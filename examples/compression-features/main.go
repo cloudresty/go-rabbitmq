@@ -21,7 +21,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Printf("Failed to close client: %v", err)
+		}
+	}()
 
 	// Create a publisher with basic compression (no-op)
 	basicPublisher, err := client.NewPublisher(
@@ -32,7 +36,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create basic publisher: %v", err)
 	}
-	defer basicPublisher.Close()
+	defer func() {
+		_ = basicPublisher.Close() // Ignore close error in defer
+	}()
 
 	// Publish a message (will not be compressed due to no-op compressor)
 	message := &rabbitmq.Message{
@@ -59,7 +65,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create advanced publisher: %v", err)
 	}
-	defer advancedPublisher.Close()
+	defer func() {
+		_ = advancedPublisher.Close() // Ignore close error in defer
+	}()
 
 	// Publish a larger message that will be compressed
 	largeMessage := &rabbitmq.Message{

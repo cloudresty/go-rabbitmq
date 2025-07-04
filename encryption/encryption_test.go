@@ -37,7 +37,9 @@ func TestAESGCM_NewAESGCM(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			key := make([]byte, tt.keyLength)
-			rand.Read(key)
+			if _, err := rand.Read(key); err != nil {
+				t.Fatalf("Failed to generate random key: %v", err)
+			}
 
 			encryptor, err := NewAESGCM(key)
 			if tt.wantErr {
@@ -62,7 +64,9 @@ func TestAESGCM_NewAESGCM(t *testing.T) {
 func TestAESGCM_EncryptDecrypt(t *testing.T) {
 	// Create encryptor with random key
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("Failed to generate random key: %v", err)
+	}
 
 	encryptor, err := NewAESGCM(key)
 	if err != nil {
@@ -129,7 +133,9 @@ func TestAESGCM_EncryptDecrypt(t *testing.T) {
 
 func TestAESGCM_DecryptInvalidData(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("Failed to generate random key: %v", err)
+	}
 
 	encryptor, err := NewAESGCM(key)
 	if err != nil {
@@ -166,7 +172,9 @@ func TestAESGCM_DecryptInvalidData(t *testing.T) {
 
 func TestAESGCM_Algorithm(t *testing.T) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("Failed to generate random key: %v", err)
+	}
 
 	encryptor, err := NewAESGCM(key)
 	if err != nil {
@@ -187,8 +195,12 @@ func TestAESGCM_DifferentKeysProduceDifferentResults(t *testing.T) {
 	// Create two encryptors with different keys
 	key1 := make([]byte, 32)
 	key2 := make([]byte, 32)
-	rand.Read(key1)
-	rand.Read(key2)
+	if _, err := rand.Read(key1); err != nil {
+		t.Fatalf("Failed to generate key1: %v", err)
+	}
+	if _, err := rand.Read(key2); err != nil {
+		t.Fatalf("Failed to generate key2: %v", err)
+	}
 
 	encryptor1, err := NewAESGCM(key1)
 	if err != nil {
@@ -276,7 +288,9 @@ func TestNoEncryption(t *testing.T) {
 
 func BenchmarkAESGCM_Encrypt(b *testing.B) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		b.Fatalf("Failed to generate key: %v", err)
+	}
 
 	encryptor, err := NewAESGCM(key)
 	if err != nil {
@@ -284,7 +298,9 @@ func BenchmarkAESGCM_Encrypt(b *testing.B) {
 	}
 
 	data := make([]byte, 1024) // 1KB of data
-	rand.Read(data)
+	if _, err := rand.Read(data); err != nil {
+		b.Fatalf("Failed to generate data: %v", err)
+	}
 
 	for b.Loop() {
 		_, err := encryptor.Encrypt(data)
@@ -296,7 +312,9 @@ func BenchmarkAESGCM_Encrypt(b *testing.B) {
 
 func BenchmarkAESGCM_Decrypt(b *testing.B) {
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		b.Fatalf("Failed to generate key: %v", err)
+	}
 
 	encryptor, err := NewAESGCM(key)
 	if err != nil {
@@ -304,7 +322,9 @@ func BenchmarkAESGCM_Decrypt(b *testing.B) {
 	}
 
 	data := make([]byte, 1024) // 1KB of data
-	rand.Read(data)
+	if _, err := rand.Read(data); err != nil {
+		b.Fatalf("Failed to generate data: %v", err)
+	}
 
 	encrypted, err := encryptor.Encrypt(data)
 	if err != nil {

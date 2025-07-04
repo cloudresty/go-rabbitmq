@@ -28,7 +28,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create connection pool: %v", err)
 	}
-	defer connectionPool.Close()
+	defer func() {
+		_ = connectionPool.Close() // Ignore close error in defer
+	}()
 
 	fmt.Printf("✓ Connection pool created with %d connections\n", connectionPool.Size())
 	fmt.Printf("✓ Healthy connections: %d\n", connectionPool.HealthyCount())
@@ -55,7 +57,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create client with pool: %v", err)
 	}
-	defer clientWithPool.Close()
+	defer func() {
+		_ = clientWithPool.Close() // Ignore close error in defer
+	}()
 
 	fmt.Printf("✓ Client configured with connection pooler\n")
 

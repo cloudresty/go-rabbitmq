@@ -334,9 +334,15 @@ func TestInMemoryStore(t *testing.T) {
 		saga2 := &Saga{ID: "saga2", Name: "test2", State: StateCompleted}
 		saga3 := &Saga{ID: "saga3", Name: "test3", State: StateFailed}
 
-		store.SaveSaga(ctx, saga1)
-		store.SaveSaga(ctx, saga2)
-		store.SaveSaga(ctx, saga3)
+		if err := store.SaveSaga(ctx, saga1); err != nil {
+			t.Fatalf("Failed to save saga1: %v", err)
+		}
+		if err := store.SaveSaga(ctx, saga2); err != nil {
+			t.Fatalf("Failed to save saga2: %v", err)
+		}
+		if err := store.SaveSaga(ctx, saga3); err != nil {
+			t.Fatalf("Failed to save saga3: %v", err)
+		}
 
 		// List active sagas (should exclude completed and failed)
 		activeSagas, err := store.ListActiveSagas(ctx)
@@ -361,7 +367,11 @@ func TestNewManager(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("Failed to close client: %v", err)
+			}
+		}()
 
 		store := NewInMemoryStore()
 		config := Config{
@@ -374,7 +384,9 @@ func TestNewManager(t *testing.T) {
 		if err != nil {
 			t.Errorf("failed to create saga manager: %v", err)
 		}
-		defer manager.Close()
+		defer func() {
+			_ = manager.Close() // Ignore close error in defer
+		}()
 
 		if manager.client != client {
 			t.Error("expected manager to store client reference")
@@ -400,7 +412,11 @@ func TestManagerStart(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("Failed to close client: %v", err)
+			}
+		}()
 
 		store := NewInMemoryStore()
 		config := Config{
@@ -413,7 +429,9 @@ func TestManagerStart(t *testing.T) {
 		if err != nil {
 			t.Skip("Failed to create saga manager")
 		}
-		defer manager.Close()
+		defer func() {
+			_ = manager.Close() // Ignore close error in defer
+		}()
 
 		steps := []Step{
 			{Name: "create_order", Action: "orders.create", Compensation: "orders.delete"},
@@ -467,13 +485,19 @@ func TestManagerGet(t *testing.T) {
 			State: StateStarted,
 		}
 
-		store.SaveSaga(ctx, saga)
+		if err := store.SaveSaga(ctx, saga); err != nil {
+			t.Fatalf("Failed to save saga: %v", err)
+		}
 
 		client, err := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("Failed to close client: %v", err)
+			}
+		}()
 
 		config := Config{
 			SagaExchange:    "test-get-sagas",
@@ -485,7 +509,9 @@ func TestManagerGet(t *testing.T) {
 		if err != nil {
 			t.Skip("Failed to create saga manager")
 		}
-		defer manager.Close()
+		defer func() {
+			_ = manager.Close() // Ignore close error in defer
+		}()
 
 		retrievedSaga, err := manager.Get(ctx, "get-test")
 		if err != nil {
@@ -508,15 +534,25 @@ func TestManagerListActive(t *testing.T) {
 		saga2 := &Saga{ID: "active2", Name: "test2", State: StateCompensating}
 		saga3 := &Saga{ID: "completed", Name: "test3", State: StateCompleted}
 
-		store.SaveSaga(ctx, saga1)
-		store.SaveSaga(ctx, saga2)
-		store.SaveSaga(ctx, saga3)
+		if err := store.SaveSaga(ctx, saga1); err != nil {
+			t.Fatalf("Failed to save saga1: %v", err)
+		}
+		if err := store.SaveSaga(ctx, saga2); err != nil {
+			t.Fatalf("Failed to save saga2: %v", err)
+		}
+		if err := store.SaveSaga(ctx, saga3); err != nil {
+			t.Fatalf("Failed to save saga3: %v", err)
+		}
 
 		client, err := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("Failed to close client: %v", err)
+			}
+		}()
 
 		config := Config{
 			SagaExchange:    "test-list-sagas",
@@ -528,7 +564,9 @@ func TestManagerListActive(t *testing.T) {
 		if err != nil {
 			t.Skip("Failed to create saga manager")
 		}
-		defer manager.Close()
+		defer func() {
+			_ = manager.Close() // Ignore close error in defer
+		}()
 
 		activeSagas, err := manager.ListActive(ctx)
 		if err != nil {
@@ -547,7 +585,11 @@ func TestManagerClose(t *testing.T) {
 		if err != nil {
 			t.Skip("RabbitMQ not available for testing")
 		}
-		defer client.Close()
+		defer func() {
+			if err := client.Close(); err != nil {
+				t.Errorf("Failed to close client: %v", err)
+			}
+		}()
 
 		store := NewInMemoryStore()
 		config := Config{
@@ -686,7 +728,9 @@ func BenchmarkLoadSaga(b *testing.B) {
 		Name:  "benchmark",
 		State: StateStarted,
 	}
-	store.SaveSaga(ctx, saga)
+	if err := store.SaveSaga(ctx, saga); err != nil {
+		b.Fatalf("Failed to save saga: %v", err)
+	}
 
 	for b.Loop() {
 		_, _ = store.LoadSaga(ctx, "benchmark")
@@ -696,7 +740,11 @@ func BenchmarkLoadSaga(b *testing.B) {
 // Example functions showing usage patterns
 func ExampleNewManager() {
 	client, _ := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			// Handle error in real code
+		}
+	}()
 
 	store := NewInMemoryStore()
 	config := Config{
@@ -706,7 +754,9 @@ func ExampleNewManager() {
 	}
 
 	manager, _ := NewManager(client, store, config)
-	defer manager.Close()
+	defer func() {
+		_ = manager.Close() // Ignore close error in defer
+	}()
 
 	_ = manager
 	// Output:
@@ -714,7 +764,11 @@ func ExampleNewManager() {
 
 func ExampleManager_Start() {
 	client, _ := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			// Handle error in real code
+		}
+	}()
 
 	store := NewInMemoryStore()
 	config := Config{
@@ -724,7 +778,9 @@ func ExampleManager_Start() {
 	}
 
 	manager, _ := NewManager(client, store, config)
-	defer manager.Close()
+	defer func() {
+		_ = manager.Close() // Ignore close error in defer
+	}()
 
 	steps := []Step{
 		{Name: "create_order", Action: "orders.create", Compensation: "orders.delete"},

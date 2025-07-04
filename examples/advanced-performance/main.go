@@ -24,7 +24,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close() // Ignore close error in defer
+	}()
 
 	// Create a publisher
 	publisher, err := client.NewPublisher(
@@ -33,7 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore close error in defer
+	}()
 
 	// Publish some messages to generate metrics
 	fmt.Println("Publishing messages to generate performance metrics...")

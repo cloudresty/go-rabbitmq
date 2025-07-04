@@ -82,7 +82,7 @@ func (g *Gzip) Compress(data []byte) ([]byte, error) {
 	}
 
 	if _, err := writer.Write(data); err != nil {
-		writer.Close()
+		_ = writer.Close() // Ignore close error when write fails
 		return nil, fmt.Errorf("failed to write compressed data: %w", err)
 	}
 
@@ -107,7 +107,9 @@ func (g *Gzip) Decompress(data []byte) ([]byte, error) {
 		// Return a descriptive error instead of silently failing.
 		return nil, fmt.Errorf("data does not appear to be valid gzip: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		_ = reader.Close() // Ignore close error in defer
+	}()
 
 	decompressed, err := io.ReadAll(reader)
 	if err != nil {
@@ -164,7 +166,7 @@ func (z *Zlib) Compress(data []byte) ([]byte, error) {
 	}
 
 	if _, err := writer.Write(data); err != nil {
-		writer.Close()
+		_ = writer.Close() // Ignore close error when write fails
 		return nil, fmt.Errorf("failed to write compressed data: %w", err)
 	}
 
@@ -188,7 +190,9 @@ func (z *Zlib) Decompress(data []byte) ([]byte, error) {
 		// Return a descriptive error.
 		return nil, fmt.Errorf("data does not appear to be valid zlib: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		_ = reader.Close() // Ignore close error in defer
+	}()
 
 	decompressed, err := io.ReadAll(reader)
 	if err != nil {

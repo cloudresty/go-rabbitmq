@@ -151,7 +151,7 @@ func New(size int, opts ...Option) (*ConnectionPool, error) {
 		client, err := rabbitmq.NewClient(connOpts...)
 		if err != nil {
 			// Close any already created connections
-			pool.Close()
+			_ = pool.Close() // Ignore close error when creation fails
 			return nil, fmt.Errorf("failed to create connection %d: %w", i, err)
 		}
 		pool.connections[i] = client
@@ -348,7 +348,7 @@ func (p *ConnectionPool) repairConnections(indices []int) {
 
 		// Close the old connection if it exists
 		if old := p.connections[idx]; old != nil {
-			old.Close()
+			_ = old.Close() // Ignore close error when repairing
 		}
 
 		// Create a new connection
