@@ -48,13 +48,14 @@ type ConnectionPool struct {
 	size           int
 	current        uint64
 	mu             sync.RWMutex
-	closed         bool
+	closed         int32 // Use atomic for race-free access
 	clientOptions  []rabbitmq.Option
 
 	// Health monitoring (immutable after creation)
 	healthTicker    *time.Ticker
 	healthInterval  time.Duration
 	stopHealthCheck chan struct{}
+	healthStopped   chan struct{} // Signal that health monitoring has stopped
 	autoRepair      bool
 
 	// Pool statistics
@@ -139,6 +140,7 @@ func New(size int, opts ...Option) (*ConnectionPool, error) {
 		clientOptions:   config.clientOptions,
 		healthInterval:  config.healthCheckInterval,
 		stopHealthCheck: make(chan struct{}),
+		healthStopped:   make(chan struct{}),
 		autoRepair:      config.autoRepair,
 		stats:           internalStats{},
 	}
@@ -184,7 +186,7 @@ func (p *ConnectionPool) startHealthMonitoring() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		return
 	}
 
@@ -201,26 +203,25 @@ func (p *ConnectionPool) startHealthMonitoring() {
 					emit.ZString("error", fmt.Sprintf("%v", r)),
 					emit.ZString("stack", fmt.Sprintf("%+v", r)))
 			}
+			// Signal that health monitoring has stopped
+			close(p.healthStopped)
 		}()
 
 		for {
 			select {
+			case <-p.stopHealthCheck:
+				return
 			case _, ok := <-p.healthTicker.C:
 				if !ok {
 					// Ticker was stopped and channel closed
 					return
 				}
 				// Check if pool is still open before performing health check
-				p.mu.RLock()
-				if p.closed {
-					p.mu.RUnlock()
+				if atomic.LoadInt32(&p.closed) == 1 {
 					return
 				}
-				p.mu.RUnlock()
 
 				p.performHealthCheck()
-			case <-p.stopHealthCheck:
-				return
 			}
 		}
 	}()
@@ -229,7 +230,7 @@ func (p *ConnectionPool) startHealthMonitoring() {
 // updateHealthyClients updates the list of healthy clients (call with lock held)
 func (p *ConnectionPool) updateHealthyClients() {
 	// Check if pool is closed
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		p.healthyClients = nil
 		return
 	}
@@ -263,7 +264,7 @@ func (p *ConnectionPool) performHealthCheck() {
 	defer cancel()
 
 	p.mu.RLock()
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		p.mu.RUnlock()
 		return
 	}
@@ -337,7 +338,7 @@ func (p *ConnectionPool) repairConnections(indices []int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		return
 	}
 
@@ -383,7 +384,7 @@ func (p *ConnectionPool) Get() (*rabbitmq.Client, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		return nil, fmt.Errorf("connection pool is closed")
 	}
 
@@ -401,7 +402,7 @@ func (p *ConnectionPool) GetClientByIndex(index int) *rabbitmq.Client {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if p.closed || index < 0 || index >= p.size {
+	if atomic.LoadInt32(&p.closed) == 1 || index < 0 || index >= p.size {
 		return nil
 	}
 
@@ -418,7 +419,7 @@ func (p *ConnectionPool) HealthCheck(ctx context.Context) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		return fmt.Errorf("connection pool is closed")
 	}
 
@@ -452,7 +453,7 @@ func (p *ConnectionPool) GetStats() Stats {
 	// Create a copy without the mutex to avoid copying lock value
 	stats := Stats{
 		Size:                    p.size,
-		Closed:                  p.closed,
+		Closed:                  atomic.LoadInt32(&p.closed) == 1,
 		HealthyConnections:      p.stats.HealthyConnections,
 		UnhealthyConnections:    p.stats.UnhealthyConnections,
 		TotalRepairAttempts:     p.stats.TotalRepairAttempts,
@@ -461,7 +462,7 @@ func (p *ConnectionPool) GetStats() Stats {
 		AutoRepairEnabled:       p.autoRepair,
 	}
 
-	if !p.closed {
+	if atomic.LoadInt32(&p.closed) == 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -485,19 +486,24 @@ func (p *ConnectionPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed {
+	if atomic.LoadInt32(&p.closed) == 1 {
 		return nil
 	}
+
+	// Set closed flag first to signal shutdown
+	atomic.StoreInt32(&p.closed, 1)
 
 	// Stop health monitoring
 	if p.healthTicker != nil {
 		p.healthTicker.Stop()
-		p.healthTicker = nil
+		// Don't set to nil here - let the goroutine handle cleanup
 	}
 
 	// Signal health monitoring to stop (only if channel isn't closed)
 	select {
 	case p.stopHealthCheck <- struct{}{}:
+		// Wait for health monitoring to stop completely
+		<-p.healthStopped
 	default:
 		// Channel might be closed or full, that's okay
 	}
@@ -510,8 +516,6 @@ func (p *ConnectionPool) Close() error {
 			}
 		}
 	}
-
-	p.closed = true
 
 	emit.Info.StructuredFields("Connection pool closed",
 		emit.ZInt("size", p.size),

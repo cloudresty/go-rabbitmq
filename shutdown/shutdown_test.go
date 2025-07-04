@@ -358,7 +358,9 @@ func TestInFlightTracker_CloseWithTimeout(t *testing.T) {
 	tracker := NewInFlightTracker()
 
 	// Start an operation that won't complete
-	tracker.Start()
+	if !tracker.Start() {
+		t.Fatal("Expected Start() to succeed on fresh tracker")
+	}
 	// Intentionally not calling Done()
 
 	// Close with short timeout should timeout
@@ -377,9 +379,10 @@ func TestInFlightTracker_CloseWithTimeout_Success(t *testing.T) {
 
 	// Start and complete operations quickly
 	go func() {
-		tracker.Start()
-		time.Sleep(time.Millisecond * 5)
-		tracker.Done()
+		if tracker.Start() {
+			time.Sleep(time.Millisecond * 5)
+			tracker.Done()
+		}
 	}()
 
 	// Close with sufficient timeout should succeed
