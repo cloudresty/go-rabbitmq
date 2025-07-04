@@ -96,29 +96,7 @@ func TestAPI_BasicFlow(t *testing.T) {
 		WithHeader("test", "value").
 		WithExpiration(5 * time.Minute)
 
-	// Test publishing
-	err = publisher.Publish(ctx, "", "test.key", message)
-	if err != nil {
-		t.Fatalf("Failed to publish message: %v", err)
-	}
-
-	// Test publisher with confirmations
-	confirmingPublisher, err := client.NewPublisher(
-		WithConfirmation(5 * time.Second),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create confirming publisher: %v", err)
-	}
-	defer func() {
-		_ = confirmingPublisher.Close() // Ignore close error in defer
-	}()
-
-	err = confirmingPublisher.Publish(ctx, "", "test.key", message)
-	if err != nil {
-		t.Fatalf("Failed to publish with confirmation: %v", err)
-	}
-
-	// Test Consumer
+	// Test Consumer - Set up consumer BEFORE publishing
 	consumer, err := client.NewConsumer(
 		WithPrefetchCount(1),
 	)
@@ -141,11 +119,43 @@ func TestAPI_BasicFlow(t *testing.T) {
 	}
 
 	// Start consuming in background
+	consumerReady := make(chan struct{})
 	go func() {
+		// Signal that we're about to start consuming
+		close(consumerReady)
 		if err := consumer.Consume(ctx, queue.Name, handler); err != nil {
 			t.Logf("Consumer error: %v", err)
 		}
 	}()
+
+	// Wait for consumer to be ready
+	<-consumerReady
+	// Add a small delay to ensure consumer is fully initialized
+	time.Sleep(100 * time.Millisecond)
+
+	// Now publish messages after consumer is ready
+	// Test publishing
+	err = publisher.Publish(ctx, "", "test.key", message)
+	if err != nil {
+		t.Fatalf("Failed to publish message: %v", err)
+	}
+
+	// Test publisher with confirmations
+	confirmingPublisher, err := client.NewPublisher(
+		WithDefaultExchange("test-exchange"),
+		WithConfirmation(5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create confirming publisher: %v", err)
+	}
+	defer func() {
+		_ = confirmingPublisher.Close() // Ignore close error in defer
+	}()
+
+	err = confirmingPublisher.Publish(ctx, "", "test.key", message)
+	if err != nil {
+		t.Fatalf("Failed to publish with confirmation: %v", err)
+	}
 
 	// Wait for messages
 	timeout := time.After(5 * time.Second)
