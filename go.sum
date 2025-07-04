@@ -1,0 +1,16 @@
+github.com/cloudresty/emit v1.2.4 h1:jkLkPBRsR3YKLvDjeWGugKFH91As+MTG/AMAye8F24g=
+github.com/cloudresty/emit v1.2.4/go.mod h1:RNbe5bq6e8o/jf9m4Cz/Y3s9YPFoDBAWyuyxdoNw80I=
+github.com/cloudresty/go-env v1.0.1 h1:dO0sAHNSbOTD0NQ7a0QHbQo0MaA7Fcqm8xmhYjS5bGQ=
+github.com/cloudresty/go-env v1.0.1/go.mod h1:2lHpYP8L6Jzdr5HHGe3d4Qiq39ksXjIuzaT4yWwWem0=
+github.com/cloudresty/ulid v1.2.1 h1:4oncjuEDl/EeirAm2LtTt+De0v5QFT887BF8s6Vp1Ss=
+github.com/cloudresty/ulid v1.2.1/go.mod h1:iyDg3lPcUBYchYi89lADHjjUtItrCKE6KLAe1k+Byj4=
+github.com/google/go-cmp v0.5.5 h1:Khx7svrCpmxxtHBq5j2mp/xVjsi8hQMfNLvJFAlrGgU=
+github.com/google/go-cmp v0.5.5/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+github.com/rabbitmq/amqp091-go v1.10.0 h1:STpn5XsHlHGcecLmMFCtg7mqq0RnD+zFr4uzukfVhBw=
+github.com/rabbitmq/amqp091-go v1.10.0/go.mod h1:Hy4jKW5kQART1u+JkDTF9YYOQUHXqMuhrgxOEeS7G4o=
+go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
+golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 h1:E7g+9GITq07hpfrRu66IVDexMakfv52eLZ2CXBWiKr4=
+golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+google.golang.org/protobuf v1.36.6 h1:z1NpPI8ku2WgiWnf+t9wTPsn6eP1L7ksHUlkfLvd9xY=
+google.golang.org/protobuf v1.36.6/go.mod h1:jduwjTPXsFjZGTmRluh+L6NjiWu7pchiJ2/5YcXBHnY=
