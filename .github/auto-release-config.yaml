@@ -1,0 +1,95 @@
+# Automated Release Configuration
+# This file controls the behavior of the automated release pipeline
+
+# Version bumping strategy
+version_strategy:
+  # How to determine version bump from commit messages
+  major_keywords: ["BREAKING", "breaking change", "major"]
+  minor_keywords: ["feat", "feature", "add", "minor"]
+  patch_keywords: ["fix", "bug", "patch", "chore", "deps"]
+
+  # Default bump type if no keywords found
+  default_bump: "patch"
+
+# Dependencies to monitor for updates
+dependencies:
+  # Automatically discover dependencies from go.mod
+  auto_discovery: true
+
+  # Dependency update strategy
+  strategy:
+    # Update direct dependencies only, or include indirect ones
+    include_indirect: false
+
+    # Skip certain dependencies (if needed)
+    exclude_patterns:
+      - "*.local/*"  # Skip local/private modules
+      # - "example.com/legacy/*"  # Example of excluding specific patterns
+
+    # Update frequency
+    check_frequency: "weekly"
+
+    # Version constraints
+    version_strategy:
+      # Allow major version updates (could be breaking)
+      allow_major_updates: false
+      # Allow minor version updates (should be backward compatible)
+      allow_minor_updates: true
+      # Allow patch version updates (bug fixes)
+      allow_patch_updates: true
+
+  # Go version updates
+  go_version:
+    check_frequency: "weekly"
+    auto_update: true
+    current_version: "1.24.1"
+    toolchain_version: "1.24.4"
+    # Only update within same major version (1.x.x -> 1.y.z)
+    major_version_updates: false
+
+# Release settings
+release:
+  # Automatic merge to main after successful tests
+  auto_merge: true
+
+  # Create GitHub release automatically
+  auto_release: true
+
+  # Branch protection - require these checks before auto-merge
+  required_checks:
+    - "test-full-suite"
+    - "lint"
+    - "race-detection"
+    - "integration-tests"
+
+  # Release notes generation
+  changelog:
+    include_commit_links: true
+    group_by_type: true
+    exclude_types: ["docs", "style", "refactor"]
+
+# Notification settings
+notifications:
+  # Slack webhook for notifications (set in secrets)
+  slack_webhook_secret: "SLACK_WEBHOOK_URL"
+
+  # Discord webhook for notifications (set in secrets)
+  discord_webhook_secret: "DISCORD_WEBHOOK_URL"
+
+  # What events to notify about
+  notify_on:
+    - "dependency_update_available"
+    - "auto_release_created"
+    - "tests_failed"
+    - "merge_conflict"
+
+# Security settings
+security:
+  # Require signed commits
+  require_signed_commits: false
+
+  # Maximum age of dependency updates to accept
+  max_dependency_age_days: 30
+
+  # Require manual approval for major version updates
+  require_approval_for_major: true
