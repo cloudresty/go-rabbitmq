@@ -24,10 +24,74 @@ env:
   GO_VERSION: '1.24'
 
 jobs:
+  # Wait for CI workflow to complete before proceeding with release
+  wait-for-ci:
+    name: Wait for CI Completion
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # Only wait for CI on push events, not manual dispatch
+    outputs:
+      ci_success: ${{ steps.wait.outputs.ci_success }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for CI workflow
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Waiting for CI workflow to complete..."
+
+          # Get the commit SHA for the current push
+          COMMIT_SHA="${{ github.sha }}"
+          echo "Checking CI status for commit: $COMMIT_SHA"
+
+          # Wait for CI workflow to complete (max 20 minutes)
+          TIMEOUT=1200  # 20 minutes
+          ELAPSED=0
+          INTERVAL=30   # Check every 30 seconds
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            echo "Checking CI workflow status... (${ELAPSED}s elapsed)"
+
+            # Get workflow runs for this commit
+            CI_STATUS=$(gh run list --workflow=ci.yaml --commit="$COMMIT_SHA" --json status,conclusion --limit 1)
+
+            if [ "$(echo "$CI_STATUS" | jq length)" -eq 0 ]; then
+              echo "No CI workflow found for this commit yet, waiting..."
+            else
+              STATUS=$(echo "$CI_STATUS" | jq -r '.[0].status')
+              CONCLUSION=$(echo "$CI_STATUS" | jq -r '.[0].conclusion')
+
+              echo "CI Status: $STATUS, Conclusion: $CONCLUSION"
+
+              if [ "$STATUS" = "completed" ]; then
+                if [ "$CONCLUSION" = "success" ]; then
+                  echo "✅ CI workflow completed successfully"
+                  echo "ci_success=true" >> $GITHUB_OUTPUT
+                  exit 0
+                else
+                  echo "❌ CI workflow failed with conclusion: $CONCLUSION"
+                  echo "ci_success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "⏰ Timeout waiting for CI workflow"
+          echo "ci_success=false" >> $GITHUB_OUTPUT
+          exit 1
+
   # First, run comprehensive tests
   comprehensive-tests:
     name: Comprehensive Tests
     runs-on: ubuntu-latest
+    needs: [wait-for-ci]
+    if: always() && (needs.wait-for-ci.result == 'success' || github.event_name == 'workflow_dispatch')
     outputs:
       tests_passed: ${{ steps.tests.outputs.tests_passed }}
     steps:
@@ -41,48 +105,24 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Set up Docker for RabbitMQ
+      - name: Check CI status
+        if: github.event_name == 'push'
         run: |
-          # Start RabbitMQ with streams plugin for integration tests
-          docker run -d --name rabbitmq-test \
-            -p 5672:5672 \
-            -p 15672:15672 \
-            -e RABBITMQ_DEFAULT_USER=guest \
-            -e RABBITMQ_DEFAULT_PASS=guest \
-            rabbitmq:4-management
-
-          echo "Waiting for RabbitMQ to start..."
-          sleep 15
-
-          echo "Enabling RabbitMQ streams plugin..."
-          docker exec rabbitmq-test rabbitmq-plugins enable rabbitmq_stream
-
-          echo "Waiting for plugin to initialize..."
-          sleep 10
+          if [ "${{ needs.wait-for-ci.outputs.ci_success }}" != "true" ]; then
+            echo "❌ CI workflow did not complete successfully"
+            echo "Aborting release process"
+            exit 1
+          fi
+          echo "✅ CI workflow completed successfully, proceeding with release"
 
       - name: Run comprehensive test suite
         id: tests
         run: |
           echo "Running full test suite with race detection..."
 
-          # Run all tests with race detection
-          echo "Running unit tests with race detection..."
-          if ! go test -race -v ./...; then
-            echo "Unit tests failed"
-            echo "tests_passed=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "🔍 Running linting..."
-          if command -v golangci-lint &> /dev/null; then
-            if ! golangci-lint run; then
-              echo "Linting failed"
-              echo "tests_passed=false" >> $GITHUB_OUTPUT
-              exit 1
-            fi
-          else
-            echo "golangci-lint not available, skipping lint check"
-          fi
+          # Note: CI workflow has already run and passed, so we run minimal additional checks
+          echo "CI has already validated: unit tests, integration tests, linting, formatting"
+          echo "Running additional release-specific validations..."
 
           echo "🔄 Running module verification..."
           if ! go mod verify; then
@@ -91,14 +131,16 @@ jobs:
             exit 1
           fi
 
-          echo "All tests passed!"
-          echo "tests_passed=true" >> $GITHUB_OUTPUT
+          echo "🔍 Checking for any uncommitted changes..."
+          if ! git diff --quiet; then
+            echo "Uncommitted changes detected"
+            git status
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop rabbitmq-test || true
-          docker rm rabbitmq-test || true
+          echo "✅ All release validations passed!"
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
 
   # Determine release version
   determine-version:
@@ -283,9 +325,9 @@ jobs:
         run: |
           NEW_VERSION="${{ needs.determine-version.outputs.new_version }}"
           CHANGELOG="${{ steps.changelog.outputs.changelog }}"
-          
+
           echo "Creating GitHub release $NEW_VERSION..."
-          
+
           gh release create "$NEW_VERSION" \
             --title "Release $NEW_VERSION" \
             --notes "$CHANGELOG" \
