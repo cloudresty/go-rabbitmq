@@ -43,13 +43,18 @@ clean: ## Clean build artifacts
 	rm -f coverage.out coverage.html
 
 # Docker
-docker-rabbitmq: ## Start RabbitMQ in Docker
+docker-rabbitmq: ## Start RabbitMQ in Docker with streams plugin enabled
 	docker run -d --name rabbitmq-dev \
 		-p 5672:5672 \
 		-p 15672:15672 \
 		-e RABBITMQ_DEFAULT_USER=guest \
 		-e RABBITMQ_DEFAULT_PASS=guest \
 		rabbitmq:4-management
+	@echo "Waiting for RabbitMQ to start..."
+	@sleep 10
+	@echo "Enabling RabbitMQ streams plugin..."
+	docker exec rabbitmq-dev rabbitmq-plugins enable rabbitmq_stream
+	@echo "RabbitMQ with streams plugin is ready!"
 
 docker-stop: ## Stop RabbitMQ Docker container
 	docker stop rabbitmq-dev || true

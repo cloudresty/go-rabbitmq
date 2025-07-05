@@ -68,7 +68,7 @@ func (h *Handler) PublishToStream(ctx context.Context, streamName string, messag
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Declare the stream if it doesn't exist
 	err = h.ensureStreamExists(ch, streamName)
@@ -77,12 +77,24 @@ func (h *Handler) PublishToStream(ctx context.Context, streamName string, messag
 	}
 
 	// Publish the message
-	err = ch.PublishWithContext(ctx, "", streamName, false, false, amqp.Publishing{
-		ContentType: message.ContentType,
-		Body:        message.Body,
-		Headers:     message.Headers,
-		Timestamp:   time.Now(),
-	})
+	// For streams, we also store the message ID in headers as a backup
+	// to ensure reliable message identification across different stream configurations
+	headers := message.Headers
+	if headers == nil {
+		headers = make(map[string]any)
+	}
+	headers["x-message-id"] = message.MessageID
+
+	publishing := amqp.Publishing{
+		ContentType:   message.ContentType,
+		Body:          message.Body,
+		Headers:       headers,
+		MessageId:     message.MessageID,
+		CorrelationId: message.CorrelationID,
+		Timestamp:     time.Now(),
+	}
+
+	err = ch.PublishWithContext(ctx, "", streamName, false, false, publishing)
 	if err != nil {
 		return fmt.Errorf("failed to publish message to stream: %w", err)
 	}
@@ -101,7 +113,7 @@ func (h *Handler) ConsumeFromStream(ctx context.Context, streamName string, hand
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Declare the stream if it doesn't exist
 	err = h.ensureStreamExists(ch, streamName)
@@ -109,15 +121,24 @@ func (h *Handler) ConsumeFromStream(ctx context.Context, streamName string, hand
 		return fmt.Errorf("failed to ensure stream exists: %w", err)
 	}
 
-	// Create a consumer
+	// Set prefetch count for stream consumers (required for streams)
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		return fmt.Errorf("failed to set prefetch count: %w", err)
+	}
+
+	// Create a consumer with stream-specific arguments
+	args := amqp.Table{
+		"x-stream-offset": "first", // Start reading from the beginning of the stream
+	}
 	msgs, err := ch.Consume(
 		streamName, // queue
 		"",         // consumer
-		true,       // auto-ack
+		false,      // auto-ack (must be false for streams)
 		false,      // exclusive
 		false,      // no-local
 		false,      // no-wait
-		nil,        // args
+		args,       // args - include stream offset
 	)
 	if err != nil {
 		return fmt.Errorf("failed to register consumer: %w", err)
@@ -139,9 +160,28 @@ func (h *Handler) ConsumeFromStream(ctx context.Context, streamName string, hand
 				ReceivedAt: time.Now(),
 			}
 
+			// For streams, provide fallback message ID recovery from headers
+			// This ensures reliable message identification even if the primary MessageId field fails
+			if delivery.MessageId == "" && msg.Headers != nil {
+				if headerMessageId, ok := msg.Headers["x-message-id"]; ok {
+					if idStr, ok := headerMessageId.(string); ok {
+						delivery.MessageId = idStr
+					}
+				}
+			}
+
 			// Call the handler
 			if err := handler(ctx, delivery); err != nil {
+				// On error, nack the message
+				if nackErr := msg.Nack(false, false); nackErr != nil {
+					return fmt.Errorf("handler error: %w, nack error: %w", err, nackErr)
+				}
 				return fmt.Errorf("handler error: %w", err)
+			}
+
+			// Acknowledge the message after successful processing
+			if ackErr := msg.Ack(false); ackErr != nil {
+				return fmt.Errorf("failed to acknowledge message: %w", ackErr)
 			}
 		}
 	}
@@ -158,7 +198,7 @@ func (h *Handler) CreateStream(ctx context.Context, streamName string, config ra
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Prepare stream arguments
 	args := amqp.Table{
@@ -166,11 +206,28 @@ func (h *Handler) CreateStream(ctx context.Context, streamName string, config ra
 	}
 
 	if config.MaxAge > 0 {
-		args["x-max-age"] = config.MaxAge.String()
+		// RabbitMQ expects max-age as a simple string (e.g., "24h" for 24 hours, "7D" for 7 days)
+		// Convert duration to the most appropriate unit
+		if config.MaxAge >= 24*time.Hour && config.MaxAge%(24*time.Hour) == 0 {
+			// Use days if it's a multiple of 24 hours
+			days := int(config.MaxAge.Hours() / 24)
+			args["x-max-age"] = fmt.Sprintf("%dD", days)
+		} else if config.MaxAge >= time.Hour && config.MaxAge%time.Hour == 0 {
+			// Use hours if it's a multiple of hours
+			hours := int(config.MaxAge.Hours())
+			args["x-max-age"] = fmt.Sprintf("%dh", hours)
+		} else if config.MaxAge >= time.Minute && config.MaxAge%time.Minute == 0 {
+			// Use minutes if it's a multiple of minutes
+			minutes := int(config.MaxAge.Minutes())
+			args["x-max-age"] = fmt.Sprintf("%dm", minutes)
+		} else {
+			// Use seconds for anything else
+			seconds := int(config.MaxAge.Seconds())
+			args["x-max-age"] = fmt.Sprintf("%ds", seconds)
+		}
 	}
-	if config.MaxLengthMessages > 0 {
-		args["x-max-length"] = config.MaxLengthMessages
-	}
+	// Note: RabbitMQ streams don't support x-max-length (MaxLengthMessages)
+	// They only support x-max-length-bytes for size-based retention
 	if config.MaxLengthBytes > 0 {
 		args["x-max-length-bytes"] = config.MaxLengthBytes
 	}
@@ -208,7 +265,7 @@ func (h *Handler) DeleteStream(ctx context.Context, streamName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create channel: %w", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	// Delete the stream
 	_, err = ch.QueueDelete(streamName, false, false, false)

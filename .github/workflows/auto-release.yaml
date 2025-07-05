@@ -1,0 +1,394 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '**.go'
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  # Wait for CI workflow to complete before proceeding with release
+  wait-for-ci:
+    name: Wait for CI Completion
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # Only wait for CI on push events, not manual dispatch
+    outputs:
+      ci_success: ${{ steps.wait.outputs.ci_success }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for CI workflow
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Waiting for CI workflow to complete..."
+
+          # Get the commit SHA for the current push
+          COMMIT_SHA="${{ github.sha }}"
+          echo "Checking CI status for commit: $COMMIT_SHA"
+
+          # Wait for CI workflow to complete (max 20 minutes)
+          TIMEOUT=1200  # 20 minutes
+          ELAPSED=0
+          INTERVAL=30   # Check every 30 seconds
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            echo "Checking CI workflow status... (${ELAPSED}s elapsed)"
+
+            # Get workflow runs for this commit
+            CI_STATUS=$(gh run list --workflow=ci.yaml --commit="$COMMIT_SHA" --json status,conclusion --limit 1)
+
+            if [ "$(echo "$CI_STATUS" | jq length)" -eq 0 ]; then
+              echo "No CI workflow found for this commit yet, waiting..."
+            else
+              STATUS=$(echo "$CI_STATUS" | jq -r '.[0].status')
+              CONCLUSION=$(echo "$CI_STATUS" | jq -r '.[0].conclusion')
+
+              echo "CI Status: $STATUS, Conclusion: $CONCLUSION"
+
+              if [ "$STATUS" = "completed" ]; then
+                if [ "$CONCLUSION" = "success" ]; then
+                  echo "✅ CI workflow completed successfully"
+                  echo "ci_success=true" >> $GITHUB_OUTPUT
+                  exit 0
+                else
+                  echo "❌ CI workflow failed with conclusion: $CONCLUSION"
+                  echo "ci_success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "⏰ Timeout waiting for CI workflow"
+          echo "ci_success=false" >> $GITHUB_OUTPUT
+          exit 1
+
+  # First, run comprehensive tests
+  comprehensive-tests:
+    name: Comprehensive Tests
+    runs-on: ubuntu-latest
+    needs: [wait-for-ci]
+    if: always() && (needs.wait-for-ci.result == 'success' || github.event_name == 'workflow_dispatch')
+    outputs:
+      tests_passed: ${{ steps.tests.outputs.tests_passed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check CI status
+        if: github.event_name == 'push'
+        run: |
+          if [ "${{ needs.wait-for-ci.outputs.ci_success }}" != "true" ]; then
+            echo "❌ CI workflow did not complete successfully"
+            echo "Aborting release process"
+            exit 1
+          fi
+          echo "✅ CI workflow completed successfully, proceeding with release"
+
+      - name: Run comprehensive test suite
+        id: tests
+        run: |
+          echo "Running full test suite with race detection..."
+
+          # Note: CI workflow has already run and passed, so we run minimal additional checks
+          echo "CI has already validated: unit tests, integration tests, linting, formatting"
+          echo "Running additional release-specific validations..."
+
+          echo "🔄 Running module verification..."
+          if ! go mod verify; then
+            echo "Module verification failed"
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "🔍 Checking for any uncommitted changes..."
+          if ! git diff --quiet; then
+            echo "Uncommitted changes detected"
+            git status
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ All release validations passed!"
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
+
+  # Determine release version
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    needs: comprehensive-tests
+    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+      release_type: ${{ steps.version.outputs.release_type }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest tag, default to v1.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          echo "Latest tag: $LATEST_TAG"
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump
+        id: version
+        run: |
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+
+          # Remove 'v' prefix for version manipulation
+          CURRENT_VERSION=${LATEST_TAG#v}
+
+          # Split version into parts
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+
+          # Determine release type
+          RELEASE_TYPE="patch"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+          else
+            # Auto-determine based on commit messages since last tag
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline)
+
+            if echo "$COMMITS" | grep -qE "(BREAKING|breaking change|major)"; then
+              RELEASE_TYPE="major"
+            elif echo "$COMMITS" | grep -qE "(feat|feature|add|minor)"; then
+              RELEASE_TYPE="minor"
+            elif echo "$COMMITS" | grep -qE "(fix|bug|patch|chore|deps)"; then
+              RELEASE_TYPE="patch"
+            fi
+          fi
+
+          echo "Determined release type: $RELEASE_TYPE"
+
+          # Calculate new version
+          case $RELEASE_TYPE in
+            major)
+              NEW_MAJOR=$((MAJOR + 1))
+              NEW_MINOR=0
+              NEW_PATCH=0
+              ;;
+            minor)
+              NEW_MAJOR=$MAJOR
+              NEW_MINOR=$((MINOR + 1))
+              NEW_PATCH=0
+              ;;
+            patch)
+              NEW_MAJOR=$MAJOR
+              NEW_MINOR=$MINOR
+              NEW_PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="v${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+
+          echo "New version will be: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+
+  # Create release
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, determine-version]
+    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          NEW_VERSION="${{ needs.determine-version.outputs.new_version }}"
+          RELEASE_TYPE="${{ needs.determine-version.outputs.release_type }}"
+
+          # Get the latest tag for changelog generation
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          echo "Generating changelog from $LATEST_TAG to HEAD..."
+
+          # Generate changelog
+          CHANGELOG="## Changes in $NEW_VERSION\n\n"
+
+          if [ -n "$LATEST_TAG" ]; then
+            # Get commits since last tag
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get all commits if no previous tag
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          if [ -n "$COMMITS" ]; then
+            CHANGELOG="${CHANGELOG}### Commits\n$COMMITS\n\n"
+          fi
+
+          # Add dependency update info if this was triggered by dependency updates
+          if echo "$COMMITS" | grep -q "chore: update.*dependencies"; then
+            CHANGELOG="${CHANGELOG}### Dependency Updates\n"
+            CHANGELOG="${CHANGELOG}This release includes automated dependency updates to ensure the latest features and security fixes.\n\n"
+          fi
+
+          # Add release type info
+          case $RELEASE_TYPE in
+            major)
+              CHANGELOG="${CHANGELOG}### Breaking Changes\n"
+              CHANGELOG="${CHANGELOG}This is a major release that may contain breaking changes. Please review the commits above.\n\n"
+              ;;
+            minor)
+              CHANGELOG="${CHANGELOG}### New Features\n"
+              CHANGELOG="${CHANGELOG}This release includes new features and improvements.\n\n"
+              ;;
+            patch)
+              CHANGELOG="${CHANGELOG}### Bug Fixes & Improvements\n"
+              CHANGELOG="${CHANGELOG}This release includes bug fixes, improvements, and dependency updates.\n\n"
+              ;;
+          esac
+
+          CHANGELOG="${CHANGELOG}### Testing\n"
+          CHANGELOG="${CHANGELOG}- All unit tests pass\n"
+          CHANGELOG="${CHANGELOG}- Race condition detection passes\n"
+          CHANGELOG="${CHANGELOG}- Integration tests with RabbitMQ streams pass\n"
+          CHANGELOG="${CHANGELOG}- Linting and code quality checks pass\n\n"
+
+          CHANGELOG="${CHANGELOG}---\n\n"
+          CHANGELOG="${CHANGELOG}**Full Changelog**: https://github.com/cloudresty/go-rabbitmq/compare/${LATEST_TAG}...${NEW_VERSION}"
+
+          # Save changelog to file and output
+          echo -e "$CHANGELOG" > CHANGELOG.md
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          NEW_VERSION="${{ needs.determine-version.outputs.new_version }}"
+
+          echo "Creating tag $NEW_VERSION..."
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION
+
+          Automated release created by GitHub Actions.
+
+          ${{ steps.changelog.outputs.changelog }}"
+
+          echo "Pushing tag..."
+          git push origin "$NEW_VERSION"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ needs.determine-version.outputs.new_version }}"
+          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
+
+          echo "Creating GitHub release $NEW_VERSION..."
+
+          gh release create "$NEW_VERSION" \
+            --title "Release $NEW_VERSION" \
+            --notes "$CHANGELOG" \
+            --latest
+
+          echo "Release $NEW_VERSION created successfully"
+
+  # Notify about release
+  notify-release:
+    name: Notify Release
+    runs-on: ubuntu-latest
+    needs: [determine-version, create-release]
+    if: always() && needs.create-release.result == 'success'
+    steps:
+      - name: Send success notification
+        run: |
+          echo "Successfully created release ${{ needs.determine-version.outputs.new_version }}"
+          echo "Release type: ${{ needs.determine-version.outputs.release_type }}"
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          NEW_VERSION="${{ needs.determine-version.outputs.new_version }}"
+          RELEASE_TYPE="${{ needs.determine-version.outputs.release_type }}"
+
+          # Determine emoji based on release type
+          case $RELEASE_TYPE in
+            major) EMOJI="🚨" ;;
+            minor) EMOJI="✨" ;;
+            patch) EMOJI="🐛" ;;
+            *) EMOJI="🎉" ;;
+          esac
+
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"${EMOJI} go-rabbitmq Release ${NEW_VERSION}\",
+              \"blocks\": [
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*New go-rabbitmq Release: ${NEW_VERSION}*\n\n• **Type**: ${RELEASE_TYPE} release\n• **Repository**: cloudresty/go-rabbitmq\n• **Status**: ✅ All tests passed\n\n<https://github.com/cloudresty/go-rabbitmq/releases/tag/${NEW_VERSION}|View Release Notes>\"
+                  }
+                }
+              ]
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Handle failures
+  notify-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, create-release]
+    if: always() && (needs.comprehensive-tests.result == 'failure' || needs.create-release.result == 'failure')
+    steps:
+      - name: Send failure notification
+        run: |
+          if [ "${{ needs.comprehensive-tests.result }}" = "failure" ]; then
+            echo "Tests failed - release aborted"
+          elif [ "${{ needs.create-release.result }}" = "failure" ]; then
+            echo "Release creation failed"
+          fi

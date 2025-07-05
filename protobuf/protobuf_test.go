@@ -13,10 +13,12 @@ func TestNewMessageMux(t *testing.T) {
 
 	if mux == nil {
 		t.Error("NewMessageMux() returned nil")
+		return
 	}
 
 	if mux.handlers == nil {
 		t.Error("Message mux handlers map is nil")
+		return
 	}
 
 	if len(mux.handlers) != 0 {

@@ -1,0 +1,329 @@
+name: Auto Dependency Update
+
+on:
+  schedule:
+    # Run every Monday at 2 AM UTC to check for dependency updates
+    - cron: '0 2 * * 1'
+  workflow_dispatch: # Allow manual triggering
+    inputs:
+      force_update:
+        description: 'Force update even if no new versions found'
+        required: false
+        default: 'false'
+        type: boolean
+      reason:
+        description: 'Reason for the update (optional)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  check-dependencies:
+    runs-on: ubuntu-latest
+    outputs:
+      has_updates: ${{ steps.check.outputs.has_updates }}
+      update_summary: ${{ steps.check.outputs.update_summary }}
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Check for dependency updates
+        id: check
+        run: |
+          echo "Dynamically checking for dependency updates from go.mod..."
+
+          # Get all dependencies from go.mod (excluding std library and local modules)
+          echo "Extracting dependencies from go.mod..."
+          go list -m all | grep -v "^$(go list -m)$" | grep -v "^std$" > /tmp/current_deps.txt
+
+          # Get the module names only (without versions) for update checking
+          cat /tmp/current_deps.txt | awk '{print $1}' > /tmp/dep_names.txt
+
+          echo "Found $(wc -l < /tmp/dep_names.txt) dependencies to check:"
+          cat /tmp/dep_names.txt | sed 's/^/  - /'
+
+          # Check for updates to all dependencies
+          echo "Checking for available updates..."
+
+          # Use go list -u to get update information for all dependencies
+          # We'll build the command dynamically to include all dependencies
+          DEP_LIST=$(cat /tmp/dep_names.txt | tr '\n' ' ')
+
+          if [ -n "$DEP_LIST" ]; then
+            echo "Running: go list -m -u $DEP_LIST"
+            go list -m -u $DEP_LIST > /tmp/update_check.txt 2>/dev/null || true
+
+            # Also try individual checks for any that might have failed
+            while IFS= read -r dep; do
+              if ! grep -q "^$dep " /tmp/update_check.txt; then
+                echo "Individually checking $dep..."
+                go list -m -u "$dep" >> /tmp/update_check.txt 2>/dev/null || echo "$dep (check failed)" >> /tmp/update_check.txt
+              fi
+            done < /tmp/dep_names.txt
+          else
+            echo "No dependencies found to check"
+            touch /tmp/update_check.txt
+          fi
+
+          echo "Update check results:"
+          cat /tmp/update_check.txt
+
+          # Parse results and identify updates
+          HAS_UPDATES=false
+          UPDATE_SUMMARY=""
+          UPDATE_COUNT=0
+
+          echo "Analyzing update availability..."
+
+          while IFS= read -r line; do
+            # Skip empty lines and lines that failed to check
+            if [ -z "$line" ] || echo "$line" | grep -q "(check failed)"; then
+              continue
+            fi
+
+            # Parse the line: "module current [latest]" or "module current"
+            module=$(echo "$line" | awk '{print $1}')
+            current=$(echo "$line" | awk '{print $2}')
+
+            # Check if there's a third field with latest version in brackets
+            latest_field=$(echo "$line" | awk '{print $3}')
+
+            if [ -n "$latest_field" ]; then
+              # Remove brackets if present
+              latest=$(echo "$latest_field" | sed 's/\[//g' | sed 's/\]//g')
+
+              # Check if current and latest are different
+              if [ "$current" != "$latest" ] && [ "$latest" != "$current" ]; then
+                echo "Update available: $module $current → $latest"
+                HAS_UPDATES=true
+                UPDATE_COUNT=$((UPDATE_COUNT + 1))
+
+                # Create short name for display
+                short_name=$(basename "$module")
+                UPDATE_SUMMARY="${UPDATE_SUMMARY}${short_name}: $current → $latest\n"
+              else
+                echo "Up to date: $module $current"
+              fi
+            else
+              echo "Up to date: $module $current"
+            fi
+          done < /tmp/update_check.txt
+
+          # Force update if requested
+          if [ "${{ github.event.inputs.force_update }}" = "true" ]; then
+            echo "Force update requested"
+            HAS_UPDATES=true
+            if [ "$UPDATE_SUMMARY" = "" ]; then
+              UPDATE_SUMMARY="Forced update requested - running go get -u all\n"
+            fi
+          fi
+
+          # Summary
+          if [ "$HAS_UPDATES" = "true" ]; then
+            echo "Found $UPDATE_COUNT dependency updates available"
+          else
+            echo "All dependencies are up to date"
+          fi
+
+          echo "has_updates=$HAS_UPDATES" >> $GITHUB_OUTPUT
+          echo "update_summary<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$UPDATE_SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  update-dependencies:
+    needs: check-dependencies
+    if: needs.check-dependencies.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          token: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update dependencies
+        run: |
+          echo "Updating Go dependencies dynamically from go.mod..."
+
+          # First, let's see what we have before updates
+          echo "Current dependencies:"
+          go list -m all | grep -v "^$(go list -m)$" | grep -v "^std$"
+
+          # Get all direct dependencies from go.mod for targeted updates
+          echo "Extracting direct dependencies from go.mod..."
+          go mod edit -json | jq -r '.Require[]?.Path' > /tmp/direct_deps.txt 2>/dev/null || {
+            # Fallback if jq is not available
+            grep "^\s*[^/].*\s" go.mod | grep -v "^module\|^go\|^toolchain\|^require\|^)\|^replace\|^exclude" | awk '{print $1}' > /tmp/direct_deps.txt
+          }
+
+          echo "Direct dependencies to update:"
+          cat /tmp/direct_deps.txt | sed 's/^/  - /'
+
+          # Update each dependency individually for better error handling
+          UPDATED_COUNT=0
+          FAILED_COUNT=0
+
+          while IFS= read -r dep; do
+            if [ -n "$dep" ]; then
+              echo "Updating $dep..."
+              if go get -u "$dep@latest"; then
+                echo "Successfully updated $dep"
+                UPDATED_COUNT=$((UPDATED_COUNT + 1))
+              else
+                echo "Failed to update $dep"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+              fi
+            fi
+          done < /tmp/direct_deps.txt
+
+          # Also run a general update to catch any indirect dependencies
+          echo "Running general dependency update..."
+          go get -u ./...
+
+          # Clean up and verify
+          echo "Tidying modules..."
+          go mod tidy
+
+          echo "Verifying modules..."
+          go mod verify
+
+          # Show what changed
+          echo "Update Summary:"
+          echo "  - Direct dependencies updated: $UPDATED_COUNT"
+          echo "  - Failed updates: $FAILED_COUNT"
+
+          echo "Final dependency list:"
+          go list -m all | grep -v "^$(go list -m)$" | grep -v "^std$"
+
+          # Check if go.mod was actually modified
+          if git diff --quiet go.mod go.sum; then
+            echo "No changes detected in go.mod/go.sum"
+          else
+            echo "Dependencies successfully updated"
+            echo "Changed files:"
+            git diff --name-only go.mod go.sum | sed 's/^/  - /'
+          fi
+
+      - name: Run tests
+        run: |
+          echo "Running tests to ensure updates don't break anything..."
+          go test -race -short ./...
+
+      - name: Commit and push changes
+        run: |
+          if git diff --quiet go.mod go.sum; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git add go.mod go.sum
+
+          # Build commit message with optional reason
+          COMMIT_MSG="chore: update go-rabbitmq dependencies"
+          if [ -n "${{ github.event.inputs.reason }}" ]; then
+            COMMIT_MSG="$COMMIT_MSG
+
+          Reason: ${{ github.event.inputs.reason }}"
+          fi
+
+          COMMIT_MSG="$COMMIT_MSG
+
+          ${{ needs.check-dependencies.outputs.update_summary }}
+
+          Automated dependency updates:
+          $(go list -m all | grep -v "^$(go list -m)$" | grep -v "^std$" | wc -l) total dependencies managed
+
+          All tests passing with updated dependencies
+          Module verification successful
+          Auto-generated by dependency update workflow"
+
+          git commit -m "$COMMIT_MSG"
+
+          git push origin develop
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          # Create branch for PR
+          BRANCH_NAME="auto-dependency-update-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+
+          # Create PR using GitHub CLI
+          PR_BODY="## Automated Dependency Updates
+
+          This PR contains automated dependency updates:
+
+          ${{ needs.check-dependencies.outputs.update_summary }}"
+
+          # Add reason if provided
+          if [ -n "${{ github.event.inputs.reason }}" ]; then
+            PR_BODY="$PR_BODY
+
+          **Trigger Reason:** ${{ github.event.inputs.reason }}"
+          fi
+
+          PR_BODY="$PR_BODY
+
+          ### Changes
+          - Dependencies updated to latest versions
+          - All tests passing
+          - Go mod tidy completed
+
+          ### Next Steps
+          This will trigger the full test suite. If all tests pass, this will be automatically merged and trigger a release.
+
+          ---
+          *This PR was created automatically by the dependency update workflow*"
+
+          PR_URL=$(gh pr create \
+            --base develop \
+            --head "$BRANCH_NAME" \
+            --title "chore: automated dependency updates" \
+            --body "$PR_BODY" \
+            --label "dependencies,automated")
+
+          echo "Created PR: $PR_URL"
+
+          # Enable auto-merge if possible
+          if gh pr merge "$PR_URL" --auto --merge; then
+            echo "Auto-merge enabled for PR"
+          else
+            echo "Could not enable auto-merge, will require manual approval"
+          fi
+
+  trigger-full-tests:
+    needs: [check-dependencies, update-dependencies]
+    if: needs.check-dependencies.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger full test suite
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          # Trigger workflow using GitHub CLI
+          gh workflow run auto-merge-to-main.yaml \
+            --ref develop \
+            --field triggered_by="dependency-update" \
+            --field update_summary="${{ needs.check-dependencies.outputs.update_summary }}"
+
+          echo "Triggered full test suite workflow on develop branch"

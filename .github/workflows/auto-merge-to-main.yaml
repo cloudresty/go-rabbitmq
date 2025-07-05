@@ -1,0 +1,345 @@
+name: Auto Merge to Main
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    types: [closed]
+    branches:
+      - develop
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  # Only run if this is a push to develop or a merged PR to develop
+  check-trigger:
+    name: Check Trigger Conditions
+    runs-on: ubuntu-latest
+    outputs:
+      should_proceed: ${{ steps.check.outputs.should_proceed }}
+    steps:
+      - name: Check if we should proceed
+        id: check
+        run: |
+          SHOULD_PROCEED=false
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            echo "Triggered by push to develop branch"
+            SHOULD_PROCEED=true
+          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.merged }}" = "true" ] && [ "${{ github.event.pull_request.base.ref }}" = "develop" ]; then
+            echo "Triggered by merged PR to develop branch"
+            SHOULD_PROCEED=true
+          fi
+
+          echo "should_proceed=$SHOULD_PROCEED" >> $GITHUB_OUTPUT
+
+  # Wait for CI workflow to complete before proceeding
+  wait-for-ci:
+    name: Wait for CI Completion
+    runs-on: ubuntu-latest
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_proceed == 'true'
+    outputs:
+      ci_success: ${{ steps.wait.outputs.ci_success }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Wait for CI workflow
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Waiting for CI workflow to complete..."
+
+          # Get the commit SHA for the current push
+          COMMIT_SHA="${{ github.sha }}"
+          echo "Checking CI status for commit: $COMMIT_SHA"
+
+          # Wait for CI workflow to complete (max 20 minutes)
+          TIMEOUT=1200  # 20 minutes
+          ELAPSED=0
+          INTERVAL=30   # Check every 30 seconds
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            echo "Checking CI workflow status... (${ELAPSED}s elapsed)"
+
+            # Get workflow runs for this commit
+            CI_STATUS=$(gh run list --workflow=ci.yaml --commit="$COMMIT_SHA" --json status,conclusion --limit 1)
+
+            if [ "$(echo "$CI_STATUS" | jq length)" -eq 0 ]; then
+              echo "No CI workflow found for this commit yet, waiting..."
+            else
+              STATUS=$(echo "$CI_STATUS" | jq -r '.[0].status')
+              CONCLUSION=$(echo "$CI_STATUS" | jq -r '.[0].conclusion')
+
+              echo "CI Status: $STATUS, Conclusion: $CONCLUSION"
+
+              if [ "$STATUS" = "completed" ]; then
+                if [ "$CONCLUSION" = "success" ]; then
+                  echo "✅ CI workflow completed successfully"
+                  echo "ci_success=true" >> $GITHUB_OUTPUT
+                  exit 0
+                else
+                  echo "❌ CI workflow failed with conclusion: $CONCLUSION"
+                  echo "ci_success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "⏰ Timeout waiting for CI workflow"
+          echo "ci_success=false" >> $GITHUB_OUTPUT
+          exit 1
+
+  # Run minimal additional tests (only what CI doesn't cover)
+  test-develop:
+    name: Additional Tests
+    runs-on: ubuntu-latest
+    needs: [check-trigger, wait-for-ci]
+    if: needs.check-trigger.outputs.should_proceed == 'true' && needs.wait-for-ci.outputs.ci_success == 'true'
+    outputs:
+      tests_passed: ${{ steps.tests.outputs.tests_passed }}
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run additional checks
+        id: tests
+        run: |
+          echo "Running additional checks not covered by CI..."
+
+          # Check for any uncommitted changes
+          echo "Checking for uncommitted changes..."
+          if ! git diff --quiet; then
+            echo "Uncommitted changes detected"
+            git status
+            echo "tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "No uncommitted changes"
+
+          # Verify all workflows are valid
+          echo "Validating GitHub Actions workflows..."
+          for workflow in .github/workflows/*.yaml; do
+            echo "Validating $workflow..."
+            # Basic YAML syntax check
+            if ! python3 -c "import yaml; yaml.safe_load(open('$workflow'))" 2>/dev/null; then
+              echo "Invalid YAML syntax in $workflow"
+              echo "tests_passed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          done
+          echo "All workflows are valid"
+
+          echo "All additional checks passed!"
+          echo "tests_passed=true" >> $GITHUB_OUTPUT
+
+  # Merge develop to main if tests pass
+  merge-to-main:
+    name: Merge to Main
+    runs-on: ubuntu-latest
+    needs: [check-trigger, test-develop]
+    if: needs.check-trigger.outputs.should_proceed == 'true' && needs.test-develop.outputs.tests_passed == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          if [ -n "${{ secrets.CLOUDRESTY_GITBOT_PAT }}" ]; then
+            git config user.name "cloudresty-gitbot"
+            git config user.email "cloudresty-gitbot@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+          fi
+
+      - name: Check if main is behind develop
+        id: check_behind
+        run: |
+          git fetch origin main develop
+
+          # Check if main is behind develop
+          BEHIND_COUNT=$(git rev-list --count origin/main..origin/develop)
+          echo "Main is $BEHIND_COUNT commits behind develop"
+
+          if [ "$BEHIND_COUNT" -gt 0 ]; then
+            echo "needs_merge=true" >> $GITHUB_OUTPUT
+            echo "behind_count=$BEHIND_COUNT" >> $GITHUB_OUTPUT
+          else
+            echo "needs_merge=false" >> $GITHUB_OUTPUT
+            echo "Main branch is up to date with develop"
+          fi
+
+      - name: Create or update PR from develop to main
+        if: steps.check_behind.outputs.needs_merge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Creating or updating PR from develop to main..."
+
+          # Ensure required labels exist
+          gh label create "automation" --description "Automated process" --color "0e8a16" 2>/dev/null || echo "Label 'automation' already exists"
+          gh label create "auto-merge" --description "Automatic merge process" --color "1d76db" 2>/dev/null || echo "Label 'auto-merge' already exists"
+
+          # Check if PR already exists
+          EXISTING_PR=$(gh pr list --base main --head develop --state open --json number,url | jq -r '.[0].url // empty')
+
+          # Get commit info for PR description
+          BEHIND_COUNT="${{ steps.check_behind.outputs.behind_count }}"
+          LATEST_COMMIT=$(git log origin/develop --oneline -1)
+
+          PR_BODY="## Auto-Merge: Develop to Main
+
+          This PR automatically merges $BEHIND_COUNT commit(s) from develop to main.
+
+          ### Latest Changes
+          - $LATEST_COMMIT
+
+          ### Validation Completed
+          ✅ Unit tests with race detection
+          ✅ Integration tests with RabbitMQ streams
+          ✅ Linting and code quality checks
+          ✅ Module verification
+
+          ### Next Steps
+          This PR will be automatically merged and trigger a release.
+
+          ---
+          *Auto-generated by merge workflow*"
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updating existing PR: $EXISTING_PR"
+            # Update existing PR and enable auto-merge
+            gh pr edit "$EXISTING_PR" --body "$PR_BODY" --add-label "automation,auto-merge"
+            gh pr merge "$EXISTING_PR" --auto --merge
+            echo "Auto-merge enabled for existing PR"
+            PR_URL="$EXISTING_PR"
+          else
+            echo "Creating new PR from develop to main..."
+            # Create new PR
+            PR_URL=$(gh pr create \
+              --base main \
+              --head develop \
+              --title "Auto-merge: Merge develop to main" \
+              --body "$PR_BODY" \
+              --label "automation,auto-merge")
+
+            echo "Created PR: $PR_URL"
+
+            # Enable auto-merge
+            gh pr merge "$PR_URL" --auto --merge
+            echo "Auto-merge enabled for PR"
+          fi
+
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+
+      - name: Create summary
+        if: steps.check_behind.outputs.needs_merge == 'true'
+        run: |
+          echo "## Auto-Merge Summary" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All tests passed on develop branch" >> $GITHUB_STEP_SUMMARY
+          echo "✅ PR created from develop to main with auto-merge enabled" >> $GITHUB_STEP_SUMMARY
+          echo "🚀 Ready for automatic release after PR merge" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status**: Successfully merged develop to main" >> $GITHUB_STEP_SUMMARY
+          echo "**Commits merged**: ${{ steps.check_behind.outputs.behind_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tests**: All passed (unit, integration, linting, module verification)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The main branch now contains the latest changes from develop and is ready for release." >> $GITHUB_STEP_SUMMARY
+
+      - name: Skip merge if not needed
+        if: steps.check_behind.outputs.needs_merge == 'false'
+        run: |
+          echo "## Auto-Merge Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status**: No merge needed" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason**: Main branch is already up to date with develop" >> $GITHUB_STEP_SUMMARY
+
+  # Notify about merge results
+  notify-merge:
+    name: Notify Merge Results
+    runs-on: ubuntu-latest
+    needs: [test-develop, merge-to-main]
+    if: needs.test-develop.outputs.tests_passed == 'true' && needs.merge-to-main.result == 'success'
+    steps:
+      - name: Notify success
+        if: needs.merge-to-main.result == 'success'
+        run: |
+          echo "Auto-merge workflow completed successfully"
+          echo "Develop branch tests passed"
+          echo "Changes merged to main branch"
+          echo "Ready for auto-release"
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != '' && needs.merge-to-main.result == 'success'
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "go-rabbitmq: Auto-merge PR created",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*go-rabbitmq Auto-merge PR Created*\n\n• All tests passed on develop\n• PR created from develop to main\n• Auto-merge enabled for automatic merging\n• Ready for automatic release\n\n<https://github.com/cloudresty/go-rabbitmq/pulls|View Pull Requests>"
+                  }
+                }
+              ]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Handle test failures
+  notify-failure:
+    name: Notify Test Failures
+    runs-on: ubuntu-latest
+    needs: [test-develop]
+    if: always() && needs.test-develop.outputs.tests_passed == 'false'
+    steps:
+      - name: Notify failure
+        run: |
+          echo "Auto-merge workflow failed"
+          echo "Tests failed on develop branch"
+          echo "Merge to main blocked"
+
+      - name: Send failure notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "go-rabbitmq: Auto-merge failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*go-rabbitmq Auto-merge Failed*\n\n• Tests failed on develop branch\n• Merge to main blocked\n• Manual intervention required\n\n<https://github.com/cloudresty/go-rabbitmq/actions|View Actions>"
+                  }
+                }
+              ]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

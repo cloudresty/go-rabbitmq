@@ -398,7 +398,7 @@ if err != nil && err != context.Canceled {
 ### Message Design
 
 1. **Content Type**: Always set appropriate content type (e.g., "application/json")
-2. **Message ID**: Use unique, meaningful message IDs for tracking
+2. **Message ID**: Use unique, meaningful message IDs for tracking (automatically preserved through streams with backup header mechanism)
 3. **Headers**: Include relevant metadata in headers for routing and filtering
 4. **Size**: Keep messages reasonably sized; use external storage for large payloads
 

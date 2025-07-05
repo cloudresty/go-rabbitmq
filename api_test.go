@@ -32,7 +32,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close() // Ignore close error in defer
+	}()
 
 	// Test health check
 	if err := client.Ping(ctx); err != nil {
@@ -73,7 +75,9 @@ func TestAPI_BasicFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore close error in defer
+	}()
 
 	// Test message creation
 	testMsg := TestMessage{
@@ -92,34 +96,16 @@ func TestAPI_BasicFlow(t *testing.T) {
 		WithHeader("test", "value").
 		WithExpiration(5 * time.Minute)
 
-	// Test publishing
-	err = publisher.Publish(ctx, "", "test.key", message)
-	if err != nil {
-		t.Fatalf("Failed to publish message: %v", err)
-	}
-
-	// Test publisher with confirmations
-	confirmingPublisher, err := client.NewPublisher(
-		WithConfirmation(5 * time.Second),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create confirming publisher: %v", err)
-	}
-	defer confirmingPublisher.Close()
-
-	err = confirmingPublisher.Publish(ctx, "", "test.key", message)
-	if err != nil {
-		t.Fatalf("Failed to publish with confirmation: %v", err)
-	}
-
-	// Test Consumer
+	// Test Consumer - Set up consumer BEFORE publishing
 	consumer, err := client.NewConsumer(
 		WithPrefetchCount(1),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create consumer: %v", err)
 	}
-	defer consumer.Close()
+	defer func() {
+		_ = consumer.Close() // Ignore close error in defer
+	}()
 
 	// Test message consumption
 	received := make(chan TestMessage, 2)
@@ -133,11 +119,43 @@ func TestAPI_BasicFlow(t *testing.T) {
 	}
 
 	// Start consuming in background
+	consumerReady := make(chan struct{})
 	go func() {
+		// Signal that we're about to start consuming
+		close(consumerReady)
 		if err := consumer.Consume(ctx, queue.Name, handler); err != nil {
 			t.Logf("Consumer error: %v", err)
 		}
 	}()
+
+	// Wait for consumer to be ready
+	<-consumerReady
+	// Add a small delay to ensure consumer is fully initialized
+	time.Sleep(100 * time.Millisecond)
+
+	// Now publish messages after consumer is ready
+	// Test publishing
+	err = publisher.Publish(ctx, "", "test.key", message)
+	if err != nil {
+		t.Fatalf("Failed to publish message: %v", err)
+	}
+
+	// Test publisher with confirmations
+	confirmingPublisher, err := client.NewPublisher(
+		WithDefaultExchange("test-exchange"),
+		WithConfirmation(5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create confirming publisher: %v", err)
+	}
+	defer func() {
+		_ = confirmingPublisher.Close() // Ignore close error in defer
+	}()
+
+	err = confirmingPublisher.Publish(ctx, "", "test.key", message)
+	if err != nil {
+		t.Fatalf("Failed to publish with confirmation: %v", err)
+	}
 
 	// Wait for messages
 	timeout := time.After(5 * time.Second)
@@ -174,7 +192,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close() // Ignore close error in defer
+	}()
 
 	if err := client.Ping(ctx); err != nil {
 		t.Skipf("RabbitMQ not available: %v", err)
@@ -202,7 +222,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() {
+		_ = publisher.Close() // Ignore close error in defer
+	}()
 
 	// Create confirming publisher for testing confirmations
 	confirmingPublisher, err := client.NewPublisher(
@@ -212,7 +234,9 @@ func TestAPI_BatchPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create confirming publisher: %v", err)
 	}
-	defer confirmingPublisher.Close()
+	defer func() {
+		_ = confirmingPublisher.Close() // Ignore close error in defer
+	}()
 
 	// Prepare batch messages
 	messages := make([]PublishRequest, 5)
