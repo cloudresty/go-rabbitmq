@@ -67,11 +67,11 @@ jobs:
 
               if [ "$STATUS" = "completed" ]; then
                 if [ "$CONCLUSION" = "success" ]; then
-                  echo "✅ CI workflow completed successfully"
+                  echo "CI workflow completed successfully"
                   echo "ci_success=true" >> $GITHUB_OUTPUT
                   exit 0
                 else
-                  echo "❌ CI workflow failed with conclusion: $CONCLUSION"
+                  echo "CI workflow failed with conclusion: $CONCLUSION"
                   echo "ci_success=false" >> $GITHUB_OUTPUT
                   exit 1
                 fi
@@ -82,7 +82,7 @@ jobs:
             ELAPSED=$((ELAPSED + INTERVAL))
           done
 
-          echo "⏰ Timeout waiting for CI workflow"
+          echo "Timeout waiting for CI workflow"
           echo "ci_success=false" >> $GITHUB_OUTPUT
           exit 1
 
@@ -109,11 +109,11 @@ jobs:
         if: github.event_name == 'push'
         run: |
           if [ "${{ needs.wait-for-ci.outputs.ci_success }}" != "true" ]; then
-            echo "❌ CI workflow did not complete successfully"
+            echo "CI workflow did not complete successfully"
             echo "Aborting release process"
             exit 1
           fi
-          echo "✅ CI workflow completed successfully, proceeding with release"
+          echo "CI workflow completed successfully, proceeding with release"
 
       - name: Run comprehensive test suite
         id: tests
@@ -124,14 +124,14 @@ jobs:
           echo "CI has already validated: unit tests, integration tests, linting, formatting"
           echo "Running additional release-specific validations..."
 
-          echo "🔄 Running module verification..."
+          echo "Running module verification..."
           if ! go mod verify; then
             echo "Module verification failed"
             echo "tests_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "🔍 Checking for any uncommitted changes..."
+          echo "Checking for any uncommitted changes..."
           if ! git diff --quiet; then
             echo "Uncommitted changes detected"
             git status
@@ -139,7 +139,7 @@ jobs:
             exit 1
           fi
 
-          echo "✅ All release validations passed!"
+          echo "All release validations passed!"
           echo "tests_passed=true" >> $GITHUB_OUTPUT
 
   # Determine release version
@@ -186,7 +186,14 @@ jobs:
             RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           else
             # Auto-determine based on commit messages since last tag
-            COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline)
+            # Check if the tag actually exists
+            if git rev-parse --verify "$LATEST_TAG" >/dev/null 2>&1; then
+              # Tag exists, get commits since that tag
+              COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline)
+            else
+              # No existing tags, analyze all commits
+              COMMITS=$(git log --oneline)
+            fi
 
             if echo "$COMMITS" | grep -qE "(BREAKING|breaking change|major)"; then
               RELEASE_TYPE="major"
@@ -256,12 +263,15 @@ jobs:
           # Generate changelog
           CHANGELOG="## Changes in $NEW_VERSION\n\n"
 
-          if [ -n "$LATEST_TAG" ]; then
+          # Get commits for changelog
+          if [ -n "$LATEST_TAG" ] && git rev-parse --verify "$LATEST_TAG" >/dev/null 2>&1; then
             # Get commits since last tag
             COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            echo "Getting commits since last tag: $LATEST_TAG"
           else
-            # Get all commits if no previous tag
+            # Get all commits if no previous tag exists
             COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+            echo "No previous tags found, getting all commits"
           fi
 
           if [ -n "$COMMITS" ]; then
@@ -297,7 +307,13 @@ jobs:
           CHANGELOG="${CHANGELOG}- Linting and code quality checks pass\n\n"
 
           CHANGELOG="${CHANGELOG}---\n\n"
-          CHANGELOG="${CHANGELOG}**Full Changelog**: https://github.com/cloudresty/go-rabbitmq/compare/${LATEST_TAG}...${NEW_VERSION}"
+
+          # Add full changelog link only if we have a previous tag to compare with
+          if [ -n "$LATEST_TAG" ] && git rev-parse --verify "$LATEST_TAG" >/dev/null 2>&1; then
+            CHANGELOG="${CHANGELOG}**Full Changelog**: https://github.com/cloudresty/go-rabbitmq/compare/${LATEST_TAG}...${NEW_VERSION}"
+          else
+            CHANGELOG="${CHANGELOG}**Full Changelog**: https://github.com/cloudresty/go-rabbitmq/commits/${NEW_VERSION}"
+          fi
 
           # Save changelog to file and output
           echo -e "$CHANGELOG" > CHANGELOG.md
