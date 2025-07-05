@@ -95,9 +95,9 @@ dependencies:
 
 ### Workflow Files (`.github/workflows/`)
 
-- **`auto-dependency-update.yml`** - Weekly dependency monitoring and updates
-- **`auto-merge-to-main.yml`** - Automatic merging from develop to main
-- **`auto-release.yml`** - Automatic versioning and GitHub releases
+- **`auto-dependency-update.yaml`** - Weekly dependency monitoring and updates
+- **`auto-merge-to-main.yaml`** - Automatic merging from develop to main
+- **`auto-release.yaml`** - Automatic versioning and GitHub releases
 
 &nbsp;
 
@@ -249,7 +249,7 @@ The automation determines version bumps from commit messages:
 
 ```bash
 # Via GitHub CLI
-gh workflow run auto-dependency-update.yml
+gh workflow run auto-dependency-update.yaml
 
 # Via GitHub UI
 # Go to Actions → Auto Dependency Update → Run workflow
@@ -261,7 +261,7 @@ gh workflow run auto-dependency-update.yml
 
 ```bash
 # Via GitHub CLI
-gh workflow run auto-release.yml -f release_type=patch
+gh workflow run auto-release.yaml -f release_type=patch
 
 # Available options: patch, minor, major
 ```
@@ -299,7 +299,7 @@ dependencies:
 
 ### Change Schedule
 
-Edit `.github/workflows/auto-dependency-update.yml`:
+Edit `.github/workflows/auto-dependency-update.yaml`:
 
 ```yaml
 schedule:
