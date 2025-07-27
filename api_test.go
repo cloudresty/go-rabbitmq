@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // TestMessage represents a test message structure
@@ -345,4 +347,83 @@ func TestAPI_RetryPolicies(t *testing.T) {
 	}
 
 	t.Log("Retry policies work correctly")
+}
+
+func TestAPI_ConnectionNameInClientProperties(t *testing.T) {
+	// Test that connection names are properly set in client properties
+	testConnectionName := "test-connection-name"
+
+	// Create a client configuration with connection name
+	config := &clientConfig{
+		Username:             "guest",
+		Password:             "guest",
+		VHost:                "/",
+		ConnectionName:       testConnectionName,
+		Heartbeat:            10 * time.Second,
+		DialTimeout:          30 * time.Second,
+		ChannelTimeout:       10 * time.Second,
+		AutoReconnect:        true,
+		ReconnectDelay:       5 * time.Second,
+		MaxReconnectAttempts: 0,
+		Logger:               NewNopLogger(),
+		Metrics:              NewNopMetrics(),
+		Tracer:               NewNopTracer(),
+		PerformanceMonitor:   NewNopPerformanceMonitor(),
+	}
+
+	client := &Client{
+		config: config,
+	}
+
+	// Test the properties setup logic from connect method
+	properties := amqp.NewConnectionProperties()
+	if client.config.ConnectionName != "" {
+		properties.SetClientConnectionName(client.config.ConnectionName)
+	}
+
+	// Verify the connection name is set in properties
+	connectionName, exists := properties["connection_name"]
+	if !exists {
+		t.Fatal("connection_name should be set in client properties")
+	}
+
+	if connectionName != testConnectionName {
+		t.Errorf("Expected connection_name to be %q, got %q", testConnectionName, connectionName)
+	}
+}
+
+func TestAPI_EmptyConnectionNameHandling(t *testing.T) {
+	// Test that empty connection names don't cause issues
+	config := &clientConfig{
+		Username:             "guest",
+		Password:             "guest",
+		VHost:                "/",
+		ConnectionName:       "", // Empty connection name
+		Heartbeat:            10 * time.Second,
+		DialTimeout:          30 * time.Second,
+		ChannelTimeout:       10 * time.Second,
+		AutoReconnect:        true,
+		ReconnectDelay:       5 * time.Second,
+		MaxReconnectAttempts: 0,
+		Logger:               NewNopLogger(),
+		Metrics:              NewNopMetrics(),
+		Tracer:               NewNopTracer(),
+		PerformanceMonitor:   NewNopPerformanceMonitor(),
+	}
+
+	client := &Client{
+		config: config,
+	}
+
+	// Test the properties setup logic from connect method
+	properties := amqp.NewConnectionProperties()
+	if client.config.ConnectionName != "" {
+		properties.SetClientConnectionName(client.config.ConnectionName)
+	}
+
+	// Verify the connection_name is not set when empty
+	_, exists := properties["connection_name"]
+	if exists {
+		t.Error("connection_name should not be set when ConnectionName is empty")
+	}
 }

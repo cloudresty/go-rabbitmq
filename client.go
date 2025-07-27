@@ -328,10 +328,17 @@ func (c *Client) CreateChannel() (*amqp.Channel, error) {
 
 // connect establishes the connection to RabbitMQ
 func (c *Client) connect() error {
+	// Set up client properties with connection name
+	properties := amqp.NewConnectionProperties()
+	if c.config.ConnectionName != "" {
+		properties.SetClientConnectionName(c.config.ConnectionName)
+	}
+
 	amqpConfig := amqp.Config{
 		Heartbeat:       c.config.Heartbeat,
 		TLSClientConfig: c.config.TLS,
 		Dial:            amqp.DefaultDial(c.config.DialTimeout),
+		Properties:      properties,
 	}
 
 	// Try multiple URLs if available (failover support)
