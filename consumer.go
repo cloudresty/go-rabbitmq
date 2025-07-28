@@ -230,55 +230,139 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHan
 	span.SetAttribute("queue", queue)
 	span.SetAttribute("concurrency", c.config.Concurrency)
 
-	// Start consuming
-	deliveries, err := c.ch.Consume(
-		queue,
-		c.config.ConsumerTag,
-		c.config.AutoAck,
-		c.config.Exclusive,
-		c.config.NoLocal,
-		c.config.NoWait,
-		nil, // arguments
-	)
+	// Consume with automatic reconnection
+	return c.consumeWithReconnection(ctx, queue, handler, consumeConfig, span)
+}
+
+// consumeWithReconnection handles consuming with automatic reconnection
+func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, handler MessageHandler, config *consumeConfig, span Span) error {
+	for {
+		select {
+		case <-ctx.Done():
+			span.SetStatus(SpanStatusOK, "context cancelled")
+			return ctx.Err()
+		default:
+		}
+
+		// Ensure we have a valid channel
+		if err := c.ensureValidChannel(); err != nil {
+			emit.Error.StructuredFields("Failed to ensure valid channel, retrying...",
+				emit.ZString("queue", queue),
+				emit.ZString("error", err.Error()))
+
+			// Wait before retrying
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(c.client.config.ReconnectDelay):
+				continue
+			}
+		}
+
+		// Start consuming
+		deliveries, err := c.ch.Consume(
+			queue,
+			c.config.ConsumerTag,
+			c.config.AutoAck,
+			c.config.Exclusive,
+			c.config.NoLocal,
+			c.config.NoWait,
+			nil, // arguments
+		)
+		if err != nil {
+			emit.Error.StructuredFields("Failed to start consuming, retrying...",
+				emit.ZString("queue", queue),
+				emit.ZString("error", err.Error()))
+
+			// Wait before retrying
+			select {
+			case <-ctx.Done():
+				span.SetStatus(SpanStatusError, err.Error())
+				return ctx.Err()
+			case <-time.After(c.client.config.ReconnectDelay):
+				continue
+			}
+		}
+
+		emit.Info.StructuredFields("Started consuming messages",
+			emit.ZString("queue", queue),
+			emit.ZInt("concurrency", c.config.Concurrency))
+
+		// Reset stop channel for this consumption cycle
+		c.stopCh = make(chan struct{})
+		c.stopOnce = sync.Once{}
+
+		// Create worker pool
+		channelClosed := make(chan struct{})
+		for i := 0; i < c.config.Concurrency; i++ {
+			c.wg.Add(1)
+			go c.workerWithReconnection(ctx, queue, handler, deliveries, config, channelClosed)
+		}
+
+		// Wait for context cancellation, stop signal, or channel closure
+		select {
+		case <-ctx.Done():
+			emit.Info.StructuredFields("Consumption stopped due to context cancellation",
+				emit.ZString("queue", queue))
+			span.SetStatus(SpanStatusOK, "context cancelled")
+			// Stop workers
+			c.stopOnce.Do(func() {
+				close(c.stopCh)
+			})
+			c.wg.Wait()
+			return ctx.Err()
+		case <-c.stopCh:
+			emit.Info.StructuredFields("Consumption stopped due to stop signal",
+				emit.ZString("queue", queue))
+			span.SetStatus(SpanStatusOK, "stopped")
+			c.wg.Wait()
+			return nil
+		case <-channelClosed:
+			emit.Warn.StructuredFields("Consumer channel closed, reconnecting...",
+				emit.ZString("queue", queue))
+			// Stop current workers
+			c.stopOnce.Do(func() {
+				close(c.stopCh)
+			})
+			c.wg.Wait()
+			// Continue the loop to reconnect
+		}
+	}
+}
+
+// ensureValidChannel ensures the consumer has a valid channel
+func (c *Consumer) ensureValidChannel() error {
+	// Check if current channel is still open
+	if c.ch != nil && !c.ch.IsClosed() {
+		return nil
+	}
+
+	emit.Info.StructuredFields("Recreating consumer channel",
+		emit.ZString("connection_name", c.client.config.ConnectionName))
+
+	// Get a new channel from the client
+	newCh, err := c.client.getChannel()
 	if err != nil {
-		span.SetStatus(SpanStatusError, err.Error())
-		return fmt.Errorf("failed to start consuming: %w", err)
+		return fmt.Errorf("failed to get new channel: %w", err)
 	}
 
-	emit.Info.StructuredFields("Started consuming messages",
-		emit.ZString("queue", queue),
-		emit.ZInt("concurrency", c.config.Concurrency))
-
-	// Create worker pool
-	for i := 0; i < c.config.Concurrency; i++ {
-		c.wg.Add(1)
-		go c.worker(ctx, queue, handler, deliveries, consumeConfig)
+	// Set QoS if needed
+	if c.config.PrefetchCount > 0 || c.config.PrefetchSize > 0 {
+		if err := newCh.Qos(c.config.PrefetchCount, c.config.PrefetchSize, false); err != nil {
+			_ = newCh.Close() // Ignore close error in cleanup
+			return fmt.Errorf("failed to set QoS: %w", err)
+		}
 	}
 
-	// Wait for context cancellation or stop signal
-	select {
-	case <-ctx.Done():
-		emit.Info.StructuredFields("Consumption stopped due to context cancellation",
-			emit.ZString("queue", queue))
-		span.SetStatus(SpanStatusOK, "context cancelled")
-		// Stop workers
-		c.stopOnce.Do(func() {
-			close(c.stopCh)
-		})
-	case <-c.stopCh:
-		emit.Info.StructuredFields("Consumption stopped due to stop signal",
-			emit.ZString("queue", queue))
-		span.SetStatus(SpanStatusOK, "stopped")
-		// Channel is already closed, no need to close again
-	}
-
-	c.wg.Wait()
+	c.ch = newCh
+	emit.Info.StructuredFields("Consumer channel recreated successfully",
+		emit.ZString("connection_name", c.client.config.ConnectionName))
 
 	return nil
 }
 
-// worker processes messages from the delivery channel
-func (c *Consumer) worker(ctx context.Context, queue string, handler MessageHandler, deliveries <-chan amqp.Delivery, config *consumeConfig) {
+// workerWithReconnection processes messages from the delivery channel with reconnection signaling
+func (c *Consumer) workerWithReconnection(ctx context.Context, queue string, handler MessageHandler, deliveries <-chan amqp.Delivery, config *consumeConfig, channelClosed chan<- struct{}) {
 	defer c.wg.Done()
 
 	for {
@@ -291,6 +375,11 @@ func (c *Consumer) worker(ctx context.Context, queue string, handler MessageHand
 			if !ok {
 				emit.Warn.StructuredFields("Delivery channel closed",
 					emit.ZString("queue", queue))
+				// Signal that the channel is closed (only once)
+				select {
+				case channelClosed <- struct{}{}:
+				default:
+				}
 				return
 			}
 
