@@ -76,13 +76,13 @@ compressor := compression.NewGzip(threshold, level)
 
 ## Zlib Compressor
 
-### Constructor
+### Zlib Constructor
 
 ```go
 compressor := compression.NewZlib(threshold, level)
 ```
 
-### Methods
+### Zlib Methods
 
 | Method | Description |
 |--------|-------------|
@@ -91,7 +91,7 @@ compressor := compression.NewZlib(threshold, level)
 | `Compress(data []byte)` | Compresses data using zlib if size exceeds threshold |
 | `Decompress(data []byte)` | Decompresses zlib data with validation |
 
-### Parameters
+### Zlib Parameters
 
 - **threshold**: Minimum message size in bytes to trigger compression (default: 1024)
 - **level**: Compression level from 1 (fastest) to 9 (best compression)
@@ -102,13 +102,13 @@ compressor := compression.NewZlib(threshold, level)
 
 ## No-Op Compressor
 
-### Constructor
+### No-Op Constructor
 
 ```go
 compressor := compression.NewNop()
 ```
 
-### Methods
+### No-Op Methods
 
 | Method | Description |
 |--------|-------------|
