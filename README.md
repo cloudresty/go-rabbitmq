@@ -22,6 +22,7 @@
 - [Installation](#installation)
 - [Pluggable Sub-Packages](#pluggable-sub-packages)
 - [Key Features](#key-features)
+- [Enterprise-Ready Defaults](#enterprise-ready-defaults)
 - [Quick Start](#quick-start)
 - [Production Usage](#production-usage)
 - [Advanced Examples](#advanced-examples)
@@ -87,6 +88,7 @@ Each sub-package implements core interfaces defined in the root package, enablin
 
 ### Production-Ready Features
 
+- **Enterprise Defaults**: Quorum queues and Dead Letter Queues enabled by default for zero-config production readiness
 - **Connection Pooling**: Distribute load across multiple connections with health monitoring
 - **Message Encryption**: AES-256-GCM encryption with secure key management
 - **Compression**: Gzip/Zlib compression with configurable thresholds
@@ -104,6 +106,82 @@ Each sub-package implements core interfaces defined in the root package, enablin
 - **Auto-Reconnection**: Intelligent retry with configurable exponential backoff
 - **Graceful Shutdown**: Signal handling with proper resource cleanup and timeouts
 - **Comprehensive Documentation**: Each sub-package has detailed README with examples
+
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+## Enterprise-Ready Defaults
+
+**Zero-configuration production readiness** - this library uses enterprise-grade defaults out of the box:
+
+&nbsp;
+
+### Quorum Queues by Default
+
+- **High Availability**: Built-in replication across cluster nodes
+- **Data Safety**: No message loss during node failures
+- **Poison Message Protection**: Automatic delivery limits prevent infinite redelivery loops
+- **Better Performance**: Optimized for throughput in clustered environments
+
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Dead Letter Queues (DLQ) Enabled
+
+- **Automatic Creation**: DLX and DLQ created automatically with sensible naming
+- **7-Day TTL**: Messages retained in DLQ for 7 days by default
+- **Custom Configuration**: Easy customization of suffixes and TTL
+- **Error Handling**: Failed messages automatically routed for investigation
+
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Easy Customization
+
+```go
+// Default: Quorum queue with DLQ (production-ready)
+queue, _ := admin.DeclareQueue(ctx, "orders")
+
+// Custom quorum settings
+queue, _ := admin.DeclareQueue(ctx, "payments",
+    rabbitmq.WithQuorumGroupSize(5),       // Custom cluster size
+    rabbitmq.WithDeliveryLimit(3),         // Max retry attempts
+    rabbitmq.WithDLQTTL(24*time.Hour),     // Custom DLQ retention
+)
+
+// Legacy compatibility (opt-in)
+queue, _ := admin.DeclareQueue(ctx, "legacy",
+    rabbitmq.WithClassicQueue(),           // Classic queue type
+    rabbitmq.WithoutDLQ(),                 // Disable DLQ if needed
+)
+```
+
+**Benefits**: Get enterprise-grade reliability, availability, and error handling with zero configuration while maintaining full control when needed.
+
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Migration from Previous Versions
+
+Existing code continues to work unchanged! The new defaults only affect newly declared queues:
+
+```go
+// This now creates a quorum queue with DLQ (vs. classic queue before)
+admin.DeclareQueue(ctx, "my-queue")
+
+// To maintain exact previous behavior (classic queue with DLQ)
+admin.DeclareQueue(ctx, "my-queue", rabbitmq.WithClassicQueue())
+
+// To get old behavior (classic queue without DLQ)
+admin.DeclareQueue(ctx, "my-queue",
+    rabbitmq.WithClassicQueue(),
+    rabbitmq.WithoutDLQ(),
+)
+```
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -132,6 +210,14 @@ func main() {
         log.Fatal("Failed to create client:", err)
     }
     defer client.Close()
+
+    // Declare a queue - uses quorum type with DLQ by default (production-ready!)
+    admin := client.Admin()
+    queue, err := admin.DeclareQueue(context.Background(), "user-events")
+    if err != nil {
+        log.Fatal("Failed to declare queue:", err)
+    }
+    log.Printf("Created production-ready queue: %s", queue.Name)
 
     // Create a publisher
     publisher, err := client.NewPublisher(
@@ -226,6 +312,10 @@ shutdownManager.SetupSignalHandler()
 &nbsp;
 
 ## Advanced Examples
+
+### Production Defaults Demo
+
+See [examples/production-defaults/](examples/production-defaults/) for a comprehensive demonstration of the enterprise-ready defaults including quorum queues, DLQ configuration, and customization options.
 
 ### Complete Feature Integration
 

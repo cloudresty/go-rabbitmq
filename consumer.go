@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudresty/emit"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -246,9 +245,9 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 
 		// Ensure we have a valid channel
 		if err := c.ensureValidChannel(); err != nil {
-			emit.Error.StructuredFields("Failed to ensure valid channel, retrying...",
-				emit.ZString("queue", queue),
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to ensure valid channel, retrying...",
+				"queue", queue,
+				"error", err.Error())
 
 			// Wait before retrying
 			select {
@@ -270,9 +269,9 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 			nil, // arguments
 		)
 		if err != nil {
-			emit.Error.StructuredFields("Failed to start consuming, retrying...",
-				emit.ZString("queue", queue),
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to start consuming, retrying...",
+				"queue", queue,
+				"error", err.Error())
 
 			// Wait before retrying
 			select {
@@ -284,9 +283,9 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 			}
 		}
 
-		emit.Info.StructuredFields("Started consuming messages",
-			emit.ZString("queue", queue),
-			emit.ZInt("concurrency", c.config.Concurrency))
+		c.client.config.Logger.Info("Started consuming messages",
+			"queue", queue,
+			"concurrency", c.config.Concurrency)
 
 		// Reset stop channel for this consumption cycle
 		c.stopCh = make(chan struct{})
@@ -302,8 +301,8 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 		// Wait for context cancellation, stop signal, or channel closure
 		select {
 		case <-ctx.Done():
-			emit.Info.StructuredFields("Consumption stopped due to context cancellation",
-				emit.ZString("queue", queue))
+			c.client.config.Logger.Info("Consumption stopped due to context cancellation",
+				"queue", queue)
 			span.SetStatus(SpanStatusOK, "context cancelled")
 			// Stop workers
 			c.stopOnce.Do(func() {
@@ -312,14 +311,14 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 			c.wg.Wait()
 			return ctx.Err()
 		case <-c.stopCh:
-			emit.Info.StructuredFields("Consumption stopped due to stop signal",
-				emit.ZString("queue", queue))
+			c.client.config.Logger.Info("Consumption stopped due to stop signal",
+				"queue", queue)
 			span.SetStatus(SpanStatusOK, "stopped")
 			c.wg.Wait()
 			return nil
 		case <-channelClosed:
-			emit.Warn.StructuredFields("Consumer channel closed, reconnecting...",
-				emit.ZString("queue", queue))
+			c.client.config.Logger.Warn("Consumer channel closed, reconnecting...",
+				"queue", queue)
 			// Stop current workers
 			c.stopOnce.Do(func() {
 				close(c.stopCh)
@@ -337,8 +336,8 @@ func (c *Consumer) ensureValidChannel() error {
 		return nil
 	}
 
-	emit.Info.StructuredFields("Recreating consumer channel",
-		emit.ZString("connection_name", c.client.config.ConnectionName))
+	c.client.config.Logger.Info("Recreating consumer channel",
+		"connection_name", c.client.config.ConnectionName)
 
 	// Get a new channel from the client
 	newCh, err := c.client.getChannel()
@@ -355,8 +354,8 @@ func (c *Consumer) ensureValidChannel() error {
 	}
 
 	c.ch = newCh
-	emit.Info.StructuredFields("Consumer channel recreated successfully",
-		emit.ZString("connection_name", c.client.config.ConnectionName))
+	c.client.config.Logger.Info("Consumer channel recreated successfully",
+		"connection_name", c.client.config.ConnectionName)
 
 	return nil
 }
@@ -373,8 +372,8 @@ func (c *Consumer) workerWithReconnection(ctx context.Context, queue string, han
 			return
 		case delivery, ok := <-deliveries:
 			if !ok {
-				emit.Warn.StructuredFields("Delivery channel closed",
-					emit.ZString("queue", queue))
+				c.client.config.Logger.Warn("Delivery channel closed",
+					"queue", queue)
 				// Signal that the channel is closed (only once)
 				select {
 				case channelClosed <- struct{}{}:
@@ -402,10 +401,10 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 	// Apply decryption if configured
 	if c.config.Encryptor != nil {
 		if err := c.applyDecryption(enhancedDelivery); err != nil {
-			emit.Error.StructuredFields("Failed to decrypt message",
-				emit.ZString("queue", queue),
-				emit.ZString("message_id", delivery.MessageId),
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to decrypt message",
+				"queue", queue,
+				"message_id", delivery.MessageId,
+				"error", err.Error())
 			// Handle as processing error
 			c.handleProcessingError(queue, delivery, fmt.Errorf("decryption failed: %w", err), config)
 			return
@@ -415,10 +414,10 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 	// Apply decompression if configured
 	if c.config.Compressor != nil {
 		if err := c.applyDecompression(enhancedDelivery); err != nil {
-			emit.Error.StructuredFields("Failed to decompress message",
-				emit.ZString("queue", queue),
-				emit.ZString("message_id", delivery.MessageId),
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to decompress message",
+				"queue", queue,
+				"message_id", delivery.MessageId,
+				"error", err.Error())
 			// Handle as processing error
 			c.handleProcessingError(queue, delivery, fmt.Errorf("decompression failed: %w", err), config)
 			return
@@ -450,10 +449,10 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 		defer func() {
 			if r := recover(); r != nil {
 				handlerErr = fmt.Errorf("handler panicked: %v", r)
-				emit.Error.StructuredFields("Message handler panicked",
-					emit.ZString("queue", queue),
-					emit.ZString("message_id", delivery.MessageId),
-					emit.ZString("panic", fmt.Sprintf("%v", r)))
+				c.client.config.Logger.Error("Message handler panicked",
+					"queue", queue,
+					"message_id", delivery.MessageId,
+					"panic", fmt.Sprintf("%v", r))
 			}
 		}()
 
@@ -475,17 +474,17 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 
 		if !c.config.AutoAck {
 			if err := delivery.Ack(false); err != nil {
-				emit.Error.StructuredFields("Failed to acknowledge message",
-					emit.ZString("queue", queue),
-					emit.ZString("message_id", delivery.MessageId),
-					emit.ZString("error", err.Error()))
+				c.client.config.Logger.Error("Failed to acknowledge message",
+					"queue", queue,
+					"message_id", delivery.MessageId,
+					"error", err.Error())
 			}
 		}
 
-		emit.Debug.StructuredFields("Message processed successfully",
-			emit.ZString("queue", queue),
-			emit.ZString("message_id", delivery.MessageId),
-			emit.ZDuration("duration", duration))
+		c.client.config.Logger.Debug("Message processed successfully",
+			"queue", queue,
+			"message_id", delivery.MessageId,
+			"duration", duration)
 	} else {
 		// Message processing failed
 		span.SetStatus(SpanStatusError, handlerErr.Error())
@@ -495,10 +494,10 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 
 // handleProcessingError handles message processing errors with retry logic
 func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, err error, config *consumeConfig) {
-	emit.Warn.StructuredFields("Message processing failed",
-		emit.ZString("queue", queue),
-		emit.ZString("message_id", delivery.MessageId),
-		emit.ZString("error", err.Error()))
+	c.client.config.Logger.Warn("Message processing failed",
+		"queue", queue,
+		"message_id", delivery.MessageId,
+		"error", err.Error())
 
 	if c.config.AutoAck {
 		// Can't retry if auto-ack is enabled
@@ -508,10 +507,10 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 	// Check if this is a reject error
 	if rejectErr, ok := err.(*RejectError); ok {
 		if err := delivery.Nack(false, rejectErr.Requeue); err != nil {
-			emit.Error.StructuredFields("Failed to nack message",
-				emit.ZString("queue", queue),
-				emit.ZString("message_id", delivery.MessageId),
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to nack message",
+				"queue", queue,
+				"message_id", delivery.MessageId,
+				"error", err.Error())
 		}
 
 		if rejectErr.Requeue {
@@ -524,10 +523,10 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 	requeue := config.RejectRequeue
 
 	if err := delivery.Nack(false, requeue); err != nil {
-		emit.Error.StructuredFields("Failed to nack message",
-			emit.ZString("queue", queue),
-			emit.ZString("message_id", delivery.MessageId),
-			emit.ZString("error", err.Error()))
+		c.client.config.Logger.Error("Failed to nack message",
+			"queue", queue,
+			"message_id", delivery.MessageId,
+			"error", err.Error())
 	}
 
 	if requeue {
@@ -550,13 +549,13 @@ func (c *Consumer) Close() error {
 
 	if c.ch != nil && !c.ch.IsClosed() {
 		if err := c.ch.Close(); err != nil {
-			emit.Error.StructuredFields("Failed to close consumer channel",
-				emit.ZString("error", err.Error()))
+			c.client.config.Logger.Error("Failed to close consumer channel",
+				"error", err.Error())
 			return fmt.Errorf("failed to close channel: %w", err)
 		}
 	}
 
-	emit.Info.StructuredFields("Consumer closed successfully")
+	c.client.config.Logger.Info("Consumer closed successfully")
 	return nil
 }
 

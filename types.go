@@ -6,7 +6,6 @@ import (
 	"maps"
 	"time"
 
-	"github.com/cloudresty/emit"
 	"github.com/cloudresty/ulid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -221,9 +220,6 @@ func generateMessageID() string {
 	if err != nil {
 		// Fallback to timestamp-based ID if ULID generation fails
 		timestamp := time.Now().UnixNano()
-		emit.Warn.StructuredFields("ULID generation failed, using timestamp fallback",
-			emit.ZString("error", err.Error()),
-			emit.ZInt64("timestamp", timestamp))
 		return fmt.Sprintf("msg-%d", timestamp)
 	}
 	return ulidStr

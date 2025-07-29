@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudresty/emit"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -200,12 +199,12 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 		}
 	}
 
-	emit.Debug.StructuredFields("Message published successfully",
-		emit.ZString("exchange", exchange),
-		emit.ZString("routing_key", routingKey),
-		emit.ZString("message_id", message.MessageID),
-		emit.ZString("correlation_id", message.CorrelationID),
-		emit.ZBool("confirmed", p.config.ConfirmationEnabled))
+	p.client.config.Logger.Debug("Message published successfully",
+		"exchange", exchange,
+		"routing_key", routingKey,
+		"message_id", message.MessageID,
+		"correlation_id", message.CorrelationID,
+		"confirmed", p.config.ConfirmationEnabled)
 
 	span.SetStatus(SpanStatusOK, "")
 	return nil
@@ -234,8 +233,8 @@ func (p *Publisher) PublishBatch(ctx context.Context, messages []PublishRequest)
 	}
 
 	span.SetStatus(SpanStatusOK, "")
-	emit.Info.StructuredFields("Batch published successfully",
-		emit.ZInt("batch_size", len(messages)))
+	p.client.config.Logger.Info("Batch published successfully",
+		"batch_size", len(messages))
 
 	return nil
 }
@@ -246,13 +245,13 @@ func (p *Publisher) PublishBatch(ctx context.Context, messages []PublishRequest)
 func (p *Publisher) Close() error {
 	if p.ch != nil && !p.ch.IsClosed() {
 		if err := p.ch.Close(); err != nil {
-			emit.Error.StructuredFields("Failed to close publisher channel",
-				emit.ZString("error", err.Error()))
+			p.client.config.Logger.Error("Failed to close publisher channel",
+				"error", err.Error())
 			return fmt.Errorf("failed to close channel: %w", err)
 		}
 	}
 
-	emit.Info.StructuredFields("Publisher closed successfully")
+	p.client.config.Logger.Info("Publisher closed successfully")
 	return nil
 }
 

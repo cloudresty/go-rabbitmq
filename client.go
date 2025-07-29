@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudresty/emit"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -134,10 +133,10 @@ func NewClient(opts ...Option) (*Client, error) {
 		go client.connectionMonitor()
 	}
 
-	emit.Info.StructuredFields("RabbitMQ client created successfully",
-		emit.ZString("connection_name", config.ConnectionName),
-		emit.ZString("url", config.URL),
-		emit.ZString("vhost", config.VHost))
+	client.config.Logger.Info("RabbitMQ client created successfully",
+		"connection_name", config.ConnectionName,
+		"url", config.URL,
+		"vhost", config.VHost)
 
 	return client, nil
 }
@@ -187,22 +186,22 @@ func (c *Client) Close() error {
 	c.closed = true
 	close(c.closeCh)
 
-	emit.Info.StructuredFields("Closing RabbitMQ client",
-		emit.ZString("connection_name", c.config.ConnectionName))
+	c.config.Logger.Info("Closing RabbitMQ client",
+		"connection_name", c.config.ConnectionName)
 
 	// Close connection
 	if c.conn != nil && !c.conn.IsClosed() {
 		if err := c.conn.Close(); err != nil {
-			emit.Error.StructuredFields("Failed to close connection gracefully",
-				emit.ZString("error", err.Error()))
+			c.config.Logger.Error("Failed to close connection gracefully",
+				"error", err.Error())
 		}
 	}
 
 	// Wait for background goroutines to finish
 	c.closeWg.Wait()
 
-	emit.Info.StructuredFields("RabbitMQ client closed successfully",
-		emit.ZString("connection_name", c.config.ConnectionName))
+	c.config.Logger.Info("RabbitMQ client closed successfully",
+		"connection_name", c.config.ConnectionName)
 
 	return nil
 }
@@ -265,12 +264,12 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 		ch:     ch,
 	}
 
-	emit.Info.StructuredFields("Publisher created successfully",
-		emit.ZString("connection_name", c.config.ConnectionName),
-		emit.ZString("default_exchange", config.DefaultExchange),
-		emit.ZBool("mandatory", config.Mandatory),
-		emit.ZBool("persistent", config.Persistent),
-		emit.ZBool("confirmation_enabled", config.ConfirmationEnabled))
+	c.config.Logger.Info("Publisher created successfully",
+		"connection_name", c.config.ConnectionName,
+		"default_exchange", config.DefaultExchange,
+		"mandatory", config.Mandatory,
+		"persistent", config.Persistent,
+		"confirmation_enabled", config.ConfirmationEnabled)
 
 	return publisher, nil
 }
@@ -309,12 +308,12 @@ func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
 		stopCh: make(chan struct{}),
 	}
 
-	emit.Info.StructuredFields("Consumer created successfully",
-		emit.ZString("connection_name", c.config.ConnectionName),
-		emit.ZInt("prefetch_count", config.PrefetchCount),
-		emit.ZInt("prefetch_size", config.PrefetchSize),
-		emit.ZBool("auto_ack", config.AutoAck),
-		emit.ZInt("concurrency", config.Concurrency))
+	c.config.Logger.Info("Consumer created successfully",
+		"connection_name", c.config.ConnectionName,
+		"prefetch_count", config.PrefetchCount,
+		"prefetch_size", config.PrefetchSize,
+		"auto_ack", config.AutoAck,
+		"concurrency", config.Concurrency)
 
 	return consumer, nil
 }
@@ -344,17 +343,17 @@ func (c *Client) connect() error {
 	// Try multiple URLs if available (failover support)
 	urls := c.getConnectionURLs()
 
-	emit.Info.StructuredFields("Establishing RabbitMQ connection",
-		emit.ZString("connection_name", c.config.ConnectionName),
-		emit.ZString("url", c.config.URL),
-		emit.ZInt("failover_urls", len(urls)))
+	c.config.Logger.Info("Establishing RabbitMQ connection",
+		"connection_name", c.config.ConnectionName,
+		"url", c.config.URL,
+		"failover_urls", len(urls))
 
 	start := time.Now()
 	var lastErr error
 	for i, url := range urls {
-		emit.Debug.StructuredFields("Attempting connection",
-			emit.ZString("url_index", fmt.Sprintf("%d/%d", i+1, len(urls))),
-			emit.ZString("connection_name", c.config.ConnectionName))
+		c.config.Logger.Debug("Attempting connection",
+			"url_index", fmt.Sprintf("%d/%d", i+1, len(urls)),
+			"connection_name", c.config.ConnectionName)
 
 		attemptStart := time.Now()
 		conn, err := amqp.DialConfig(url, amqpConfig)
@@ -362,9 +361,9 @@ func (c *Client) connect() error {
 
 		if err != nil {
 			lastErr = err
-			emit.Debug.StructuredFields("Connection attempt failed",
-				emit.ZString("url_index", fmt.Sprintf("%d/%d", i+1, len(urls))),
-				emit.ZString("error", err.Error()))
+			c.config.Logger.Debug("Connection attempt failed",
+				"url_index", fmt.Sprintf("%d/%d", i+1, len(urls)),
+				"error", err.Error())
 			continue
 		}
 
@@ -372,9 +371,9 @@ func (c *Client) connect() error {
 		totalDuration := time.Since(start)
 		c.config.Metrics.RecordConnectionAttempt(true, totalDuration)
 
-		emit.Info.StructuredFields("RabbitMQ connection established",
-			emit.ZString("connection_name", c.config.ConnectionName),
-			emit.ZString("connected_url_index", fmt.Sprintf("%d/%d", i+1, len(urls))))
+		c.config.Logger.Info("RabbitMQ connection established",
+			"connection_name", c.config.ConnectionName,
+			"connected_url_index", fmt.Sprintf("%d/%d", i+1, len(urls)))
 
 		return nil
 	}
@@ -417,8 +416,8 @@ func (c *Client) connectionMonitor() {
 		default:
 			// Check if connection is closed
 			if c.conn != nil && c.conn.IsClosed() {
-				emit.Warn.StructuredFields("Connection lost, attempting to reconnect",
-					emit.ZString("connection_name", c.config.ConnectionName))
+				c.config.Logger.Warn("Connection lost, attempting to reconnect",
+					"connection_name", c.config.ConnectionName)
 
 				c.handleReconnection()
 			}
@@ -447,17 +446,17 @@ func (c *Client) handleReconnection() {
 		}
 
 		if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
-			emit.Error.StructuredFields("Max reconnection attempts reached",
-				emit.ZString("connection_name", c.config.ConnectionName),
-				emit.ZInt("max_attempts", c.config.MaxReconnectAttempts))
+			c.config.Logger.Error("Max reconnection attempts reached",
+				"connection_name", c.config.ConnectionName,
+				"max_attempts", c.config.MaxReconnectAttempts)
 			return
 		}
 
 		attempt++
 
-		emit.Info.StructuredFields("Attempting to reconnect",
-			emit.ZString("connection_name", c.config.ConnectionName),
-			emit.ZInt("attempt", attempt))
+		c.config.Logger.Info("Attempting to reconnect",
+			"connection_name", c.config.ConnectionName,
+			"attempt", attempt)
 
 		// Calculate delay based on reconnection policy
 		delay := c.config.ReconnectDelay
@@ -476,18 +475,18 @@ func (c *Client) handleReconnection() {
 		c.connMu.Lock()
 		if err := c.connect(); err != nil {
 			c.connMu.Unlock()
-			emit.Warn.StructuredFields("Reconnection attempt failed",
-				emit.ZString("connection_name", c.config.ConnectionName),
-				emit.ZInt("attempt", attempt),
-				emit.ZString("error", err.Error()))
+			c.config.Logger.Warn("Reconnection attempt failed",
+				"connection_name", c.config.ConnectionName,
+				"attempt", attempt,
+				"error", err.Error())
 			continue
 		}
 		c.connMu.Unlock()
 
 		c.config.Metrics.RecordReconnection(attempt)
-		emit.Info.StructuredFields("Successfully reconnected to RabbitMQ",
-			emit.ZString("connection_name", c.config.ConnectionName),
-			emit.ZInt("attempt", attempt))
+		c.config.Logger.Info("Successfully reconnected to RabbitMQ",
+			"connection_name", c.config.ConnectionName,
+			"attempt", attempt)
 
 		return
 	}

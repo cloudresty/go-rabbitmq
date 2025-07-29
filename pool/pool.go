@@ -37,7 +37,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cloudresty/emit"
 	"github.com/cloudresty/go-rabbitmq"
 )
 
@@ -50,6 +49,7 @@ type ConnectionPool struct {
 	mu             sync.RWMutex
 	closed         int32 // Use atomic for race-free access
 	clientOptions  []rabbitmq.Option
+	logger         rabbitmq.Logger
 
 	// Health monitoring (immutable after creation)
 	healthTicker    *time.Ticker
@@ -92,6 +92,7 @@ type poolConfig struct {
 	healthCheckInterval time.Duration
 	autoRepair          bool
 	clientOptions       []rabbitmq.Option
+	logger              rabbitmq.Logger
 }
 
 // WithHealthCheck enables health monitoring with the specified interval
@@ -115,6 +116,13 @@ func WithClientOptions(opts ...rabbitmq.Option) Option {
 	}
 }
 
+// WithLogger sets the logger for the connection pool
+func WithLogger(logger rabbitmq.Logger) Option {
+	return func(c *poolConfig) {
+		c.logger = logger
+	}
+}
+
 // New creates a new connection pool with the specified size and options
 func New(size int, opts ...Option) (*ConnectionPool, error) {
 	if size <= 0 {
@@ -126,6 +134,7 @@ func New(size int, opts ...Option) (*ConnectionPool, error) {
 		healthCheckInterval: 30 * time.Second,
 		autoRepair:          true,
 		clientOptions:       []rabbitmq.Option{},
+		logger:              rabbitmq.NewNopLogger(), // Default to no-op logger
 	}
 
 	// Apply options
@@ -138,6 +147,7 @@ func New(size int, opts ...Option) (*ConnectionPool, error) {
 		healthyClients:  make([]*rabbitmq.Client, 0, size),
 		size:            size,
 		clientOptions:   config.clientOptions,
+		logger:          config.logger,
 		healthInterval:  config.healthCheckInterval,
 		stopHealthCheck: make(chan struct{}),
 		healthStopped:   make(chan struct{}),
@@ -173,10 +183,10 @@ func New(size int, opts ...Option) (*ConnectionPool, error) {
 		}()
 	}
 
-	emit.Info.StructuredFields("Connection pool created successfully",
-		emit.ZInt("size", size),
-		emit.ZDuration("health_interval", pool.healthInterval),
-		emit.ZBool("auto_repair", pool.autoRepair))
+	pool.logger.Info("Connection pool created successfully",
+		"size", size,
+		"health_interval", pool.healthInterval,
+		"auto_repair", pool.autoRepair)
 
 	return pool, nil
 }
@@ -199,9 +209,9 @@ func (p *ConnectionPool) startHealthMonitoring() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				emit.Error.StructuredFields("Health monitoring goroutine panicked",
-					emit.ZString("error", fmt.Sprintf("%v", r)),
-					emit.ZString("stack", fmt.Sprintf("%+v", r)))
+				p.logger.Error("Health monitoring goroutine panicked",
+					"error", fmt.Sprintf("%v", r),
+					"stack", fmt.Sprintf("%+v", r))
 			}
 			// Signal that health monitoring has stopped
 			close(p.healthStopped)
@@ -255,8 +265,8 @@ func (p *ConnectionPool) updateHealthyClients() {
 func (p *ConnectionPool) performHealthCheck() {
 	defer func() {
 		if r := recover(); r != nil {
-			emit.Error.StructuredFields("performHealthCheck panicked",
-				emit.ZString("error", fmt.Sprintf("%v", r)))
+			p.logger.Error("performHealthCheck panicked",
+				"error", fmt.Sprintf("%v", r))
 		}
 	}()
 
@@ -291,9 +301,9 @@ func (p *ConnectionPool) performHealthCheck() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					emit.Error.StructuredFields("Client ping panicked",
-						emit.ZInt("connection_index", i),
-						emit.ZString("error", fmt.Sprintf("%v", r)))
+					p.logger.Error("Client ping panicked",
+						"connection_index", i,
+						"error", fmt.Sprintf("%v", r))
 					unhealthyCount++
 					if p.autoRepair {
 						repairNeeded = append(repairNeeded, i)
@@ -303,9 +313,9 @@ func (p *ConnectionPool) performHealthCheck() {
 
 			if err := client.Ping(ctx); err != nil {
 				unhealthyCount++
-				emit.Warn.StructuredFields("Connection health check failed",
-					emit.ZInt("connection_index", i),
-					emit.ZString("error", err.Error()))
+				p.logger.Warn("Connection health check failed",
+					"connection_index", i,
+					"error", err.Error())
 
 				if p.autoRepair && rabbitmq.IsConnectionError(err) {
 					repairNeeded = append(repairNeeded, i)
@@ -358,9 +368,9 @@ func (p *ConnectionPool) repairConnections(indices []int) {
 
 		client, err := rabbitmq.NewClient(connOpts...)
 		if err != nil {
-			emit.Error.StructuredFields("Failed to repair connection",
-				emit.ZInt("connection_index", idx),
-				emit.ZString("error", err.Error()))
+			p.logger.Error("Failed to repair connection",
+				"connection_index", idx,
+				"error", err.Error())
 			p.connections[idx] = nil
 			continue
 		}
@@ -371,8 +381,8 @@ func (p *ConnectionPool) repairConnections(indices []int) {
 		p.stats.TotalRepairAttempts++
 		p.stats.mu.Unlock()
 
-		emit.Info.StructuredFields("Connection repaired successfully",
-			emit.ZInt("connection_index", idx))
+		p.logger.Info("Connection repaired successfully",
+			"connection_index", idx)
 	}
 
 	// Update healthy clients list after repair
@@ -517,9 +527,9 @@ func (p *ConnectionPool) Close() error {
 		}
 	}
 
-	emit.Info.StructuredFields("Connection pool closed",
-		emit.ZInt("size", p.size),
-		emit.ZInt("errors", len(errors)))
+	p.logger.Info("Connection pool closed",
+		"size", p.size,
+		"errors", len(errors))
 
 	if len(errors) > 0 {
 		return fmt.Errorf("errors closing connections: %v", errors)
