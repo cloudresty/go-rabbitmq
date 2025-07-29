@@ -31,7 +31,7 @@ type Field interface {
 // SimpleField implements the Field interface for simple key-value pairs
 type SimpleField struct {
 	key   string
-	value interface{}
+	value any
 }
 
 func (f SimpleField) Key() string {

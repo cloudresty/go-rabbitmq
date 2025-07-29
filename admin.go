@@ -178,9 +178,7 @@ func WithArguments(args Table) QueueOption {
 		if config.Arguments == nil {
 			config.Arguments = make(Table)
 		}
-		for k, v := range args {
-			config.Arguments[k] = v
-		}
+		maps.Copy(config.Arguments, args)
 	}
 }
 
