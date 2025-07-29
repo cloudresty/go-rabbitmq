@@ -143,7 +143,7 @@ steps := []saga.Step{
     },
     {
         Name:         "reserve_inventory",
-        Action:       "inventory.reserve", 
+        Action:       "inventory.reserve",
         Compensation: "inventory.release",
     },
     {
@@ -202,7 +202,7 @@ if s.IsCompleted() {
     log.Println("Saga completed successfully")
 } else if s.IsFailed() {
     log.Println("Saga failed")
-    
+
     // Get failed steps for analysis
     failedSteps := s.GetFailedSteps()
     for _, step := range failedSteps {
@@ -320,6 +320,6 @@ steps := []saga.Step{
 
 An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
 
-[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
 &nbsp;
