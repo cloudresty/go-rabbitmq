@@ -427,3 +427,164 @@ func TestAPI_EmptyConnectionNameHandling(t *testing.T) {
 		t.Error("connection_name should not be set when ConnectionName is empty")
 	}
 }
+
+func TestAPI_DLQDefaultConfiguration(t *testing.T) {
+	// Test that regular queues have DLQ enabled by default
+	config := &queueConfig{
+		Durable:              true,
+		AutoDelete:           false,
+		Exclusive:            false,
+		NoWait:               false,
+		Arguments:            make(Table),
+		TTL:                  0,
+		MaxLength:            0,
+		MaxLengthBytes:       0,
+		DeadLetterExchange:   "",
+		DeadLetterRoutingKey: "",
+		// DLQ enabled by default
+		EnableDLQ:     true,
+		DLXSuffix:     ".dlx",
+		DLQSuffix:     ".dlq",
+		DLQMessageTTL: 7 * 24 * time.Hour, // 7 days default
+	}
+
+	if !config.EnableDLQ {
+		t.Error("Expected DLQ to be enabled by default")
+	}
+
+	if config.DLXSuffix != ".dlx" {
+		t.Errorf("Expected default DLX suffix to be '.dlx', got '%s'", config.DLXSuffix)
+	}
+
+	if config.DLQSuffix != ".dlq" {
+		t.Errorf("Expected default DLQ suffix to be '.dlq', got '%s'", config.DLQSuffix)
+	}
+
+	expectedTTL := 7 * 24 * time.Hour
+	if config.DLQMessageTTL != expectedTTL {
+		t.Errorf("Expected default DLQ TTL to be %v, got %v", expectedTTL, config.DLQMessageTTL)
+	}
+}
+
+func TestAPI_DLQOptions(t *testing.T) {
+	// Test WithoutDLQ option
+	config := &queueConfig{
+		EnableDLQ: true, // Start with enabled
+	}
+
+	WithoutDLQ()(config)
+
+	if config.EnableDLQ {
+		t.Error("Expected WithoutDLQ() to disable DLQ")
+	}
+
+	// Test WithDLQSuffixes option
+	config = &queueConfig{}
+	WithDLQSuffixes(".custom_dlx", ".custom_dlq")(config)
+
+	if config.DLXSuffix != ".custom_dlx" {
+		t.Errorf("Expected DLX suffix to be '.custom_dlx', got '%s'", config.DLXSuffix)
+	}
+
+	if config.DLQSuffix != ".custom_dlq" {
+		t.Errorf("Expected DLQ suffix to be '.custom_dlq', got '%s'", config.DLQSuffix)
+	}
+
+	// Test WithDLQTTL option
+	config = &queueConfig{}
+	customTTL := 3 * 24 * time.Hour
+	WithDLQTTL(customTTL)(config)
+
+	if config.DLQMessageTTL != customTTL {
+		t.Errorf("Expected DLQ TTL to be %v, got %v", customTTL, config.DLQMessageTTL)
+	}
+}
+
+func TestAPI_QuorumDLQOptions(t *testing.T) {
+	// Test WithoutQuorumDLQ option
+	config := &quorumQueueConfig{
+		queueConfig: queueConfig{
+			EnableDLQ: true, // Start with enabled
+		},
+	}
+
+	WithoutQuorumDLQ()(config)
+
+	if config.EnableDLQ {
+		t.Error("Expected WithoutQuorumDLQ() to disable DLQ")
+	}
+
+	// Test WithQuorumDLQSuffixes option
+	config = &quorumQueueConfig{}
+	WithQuorumDLQSuffixes(".quorum_dlx", ".quorum_dlq")(config)
+
+	if config.DLXSuffix != ".quorum_dlx" {
+		t.Errorf("Expected DLX suffix to be '.quorum_dlx', got '%s'", config.DLXSuffix)
+	}
+
+	if config.DLQSuffix != ".quorum_dlq" {
+		t.Errorf("Expected DLQ suffix to be '.quorum_dlq', got '%s'", config.DLQSuffix)
+	}
+
+	// Test WithQuorumDLQTTL option
+	config = &quorumQueueConfig{}
+	customTTL := 5 * 24 * time.Hour
+	WithQuorumDLQTTL(customTTL)(config)
+
+	if config.DLQMessageTTL != customTTL {
+		t.Errorf("Expected DLQ TTL to be %v, got %v", customTTL, config.DLQMessageTTL)
+	}
+}
+
+func TestAPI_QuorumQueuesByDefault(t *testing.T) {
+	// Test that regular DeclareQueue creates quorum queues by default
+	config := &queueConfig{
+		Durable:    true,
+		AutoDelete: false,
+		Exclusive:  false,
+		NoWait:     false,
+		Arguments:  make(Table),
+		// DLQ enabled by default
+		EnableDLQ:     true,
+		DLXSuffix:     ".dlx",
+		DLQSuffix:     ".dlq",
+		DLQMessageTTL: 7 * 24 * time.Hour,
+		// Quorum queues by default for production reliability
+		UseClassicQueue: false,
+	}
+
+	if config.UseClassicQueue {
+		t.Error("Expected UseClassicQueue to be false by default (quorum queues should be default)")
+	}
+
+	// Test WithClassicQueue option
+	WithClassicQueue()(config)
+
+	if !config.UseClassicQueue {
+		t.Error("Expected WithClassicQueue() to enable classic queue mode")
+	}
+}
+
+func TestAPI_QuorumQueueOptions(t *testing.T) {
+	// Test WithQuorumGroupSize option
+	config := &queueConfig{
+		Arguments: make(Table),
+	}
+
+	WithQuorumGroupSize(5)(config)
+
+	if config.Arguments["x-quorum-initial-group-size"] != 5 {
+		t.Errorf("Expected quorum group size to be 5, got %v", config.Arguments["x-quorum-initial-group-size"])
+	}
+
+	// Test WithDeliveryLimit option
+	config = &queueConfig{
+		Arguments: make(Table),
+	}
+
+	WithDeliveryLimit(10)(config)
+
+	if config.Arguments["x-delivery-limit"] != 10 {
+		t.Errorf("Expected delivery limit to be 10, got %v", config.Arguments["x-delivery-limit"])
+	}
+}
