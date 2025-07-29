@@ -155,7 +155,7 @@ func monitoredPublish(ctx context.Context, exchange, routingKey string, message 
     start := time.Now()
     err := publisher.Publish(ctx, exchange, routingKey, message)
     duration := time.Since(start)
-    
+
     monitor.RecordPublish(err == nil, duration)
     return err
 }
@@ -166,11 +166,11 @@ func monitoredConsume(ctx context.Context, queue string, handler rabbitmq.Messag
         start := time.Now()
         err := handler(ctx, delivery)
         duration := time.Since(start)
-        
+
         monitor.RecordConsume(err == nil, duration)
         return err
     }
-    
+
     return consumer.Consume(ctx, queue, wrappedHandler)
 }
 ```
@@ -201,7 +201,7 @@ func startPerformanceReporting(monitor *performance.Monitor, interval time.Durat
         defer ticker.Stop()
         for range ticker.C {
             stats := monitor.GetStats()
-            
+
             log.Printf("Performance Stats:")
             log.Printf("  Connection: %v (Total: %d, Reconnections: %d)",
                 stats.IsConnected, stats.ConnectionsTotal, stats.ReconnectionsTotal)
@@ -241,7 +241,7 @@ var (
         },
         []string{"status"},
     )
-    
+
     publishLatency = promauto.NewHistogramVec(
         prometheus.HistogramOpts{
             Name: "rabbitmq_publish_duration_seconds",
@@ -253,11 +253,11 @@ var (
 
 func exportToPrometheus(monitor *performance.Monitor) {
     stats := monitor.GetStats()
-    
+
     // Update counters
     publishTotal.WithLabelValues("success").Add(float64(stats.PublishSuccessTotal))
     publishTotal.WithLabelValues("error").Add(float64(stats.PublishErrorsTotal))
-    
+
     // Record latencies
     if stats.PublishLatencyP50 > 0 {
         publishLatency.WithLabelValues().Observe(stats.PublishLatencyP50.Seconds())
@@ -270,7 +270,7 @@ func exportToPrometheus(monitor *performance.Monitor) {
 ```go
 func exportToInfluxDB(monitor *performance.Monitor) {
     stats := monitor.GetStats()
-    
+
     point := map[string]interface{}{
         "connections_total":      stats.ConnectionsTotal,
         "publish_success_rate":   stats.PublishSuccessRate,
@@ -280,7 +280,7 @@ func exportToInfluxDB(monitor *performance.Monitor) {
         "consume_rate":          stats.ConsumeRate,
         "is_connected":          stats.IsConnected,
     }
-    
+
     // Write to InfluxDB (implementation depends on your client)
     writePointToInfluxDB("rabbitmq_performance", point)
 }
@@ -296,12 +296,12 @@ func exportToInfluxDB(monitor *performance.Monitor) {
 func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         stats := monitor.GetStats()
-        
+
         // Define health criteria
-        isHealthy := stats.IsConnected && 
-                    stats.PublishSuccessRate >= 0.95 && 
+        isHealthy := stats.IsConnected &&
+                    stats.PublishSuccessRate >= 0.95 &&
                     stats.ConsumeSuccessRate >= 0.95
-        
+
         if !isHealthy {
             w.WriteHeader(http.StatusServiceUnavailable)
             json.NewEncoder(w).Encode(map[string]interface{}{
@@ -310,7 +310,7 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
             })
             return
         }
-        
+
         w.WriteHeader(http.StatusOK)
         json.NewEncoder(w).Encode(map[string]interface{}{
             "status": "healthy",
@@ -383,7 +383,7 @@ if !stats.IsConnected {
 }
 
 if stats.PublishSuccessRate < 0.9 {
-    log.Printf("Publish issues: %d errors out of %d attempts", 
+    log.Printf("Publish issues: %d errors out of %d attempts",
         stats.PublishErrorsTotal, stats.PublishesTotal)
 }
 ```
@@ -398,6 +398,6 @@ if stats.PublishSuccessRate < 0.9 {
 
 An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
 
-[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
 &nbsp;

@@ -82,7 +82,7 @@ This document provides the complete API reference for the `pool` sub-package. Th
 import "github.com/cloudresty/go-rabbitmq/pool"
 
 // Create a connection pool with 5 connections
-pool, err := pool.New(5, 
+pool, err := pool.New(5,
     pool.WithClientOptions(rabbitmq.WithURL("amqp://localhost")),
     pool.WithHealthCheck(30*time.Second),
     pool.WithAutoRepair(true),
@@ -123,7 +123,7 @@ defer publisher.Close()
 ```go
 // Get pool statistics
 stats := pool.GetStats()
-log.Printf("Pool size: %d, Healthy: %d, Unhealthy: %d", 
+log.Printf("Pool size: %d, Healthy: %d, Unhealthy: %d",
     stats.Size, stats.HealthyConnections, stats.UnhealthyConnections)
 
 // Manual health check
@@ -178,6 +178,6 @@ pool, err := pool.New(10,
 
 An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
 
-[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
 &nbsp;

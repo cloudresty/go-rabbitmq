@@ -192,7 +192,7 @@ func processMessage(ctx context.Context, delivery *rabbitmq.Delivery) error {
         return errors.New("shutdown in progress, not accepting new operations")
     }
     defer tracker.Done() // Mark operation complete
-    
+
     // Process the message
     return processBusinessLogic(delivery)
 }
@@ -200,13 +200,13 @@ func processMessage(ctx context.Context, delivery *rabbitmq.Delivery) error {
 // In another goroutine, handle shutdown
 go func() {
     <-shutdownSignal
-    
+
     log.Println("Shutdown initiated, waiting for in-flight operations...")
-    
+
     // Close tracker and wait for operations to complete
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
-    
+
     if err := tracker.CloseWithTimeout(30 * time.Second); err != nil {
         log.Printf("Timeout waiting for in-flight operations: %v", err)
     } else {
@@ -300,42 +300,42 @@ func main() {
     config := shutdown.DefaultShutdownConfig()
     config.Logger = myLogger
     shutdownManager := shutdown.NewShutdownManager(config)
-    
+
     // Create RabbitMQ components
     client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
     if err != nil {
         log.Fatal(err)
     }
-    
+
     publisher, err := client.NewPublisher()
     if err != nil {
         log.Fatal(err)
     }
-    
+
     consumer, err := client.NewConsumer()
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // Register all components
     shutdownManager.Register(consumer)
     shutdownManager.Register(publisher)
     shutdownManager.Register(client)
-    
+
     // Setup signal handling
     signalCh := shutdownManager.SetupSignalHandler()
-    
+
     // Start application logic
     go startConsumers(consumer, shutdownManager.GetInFlightTracker())
     go startPublishers(publisher)
-    
+
     // Wait for shutdown signal
     <-signalCh
     log.Println("Shutdown signal received, initiating graceful shutdown...")
-    
+
     // Trigger shutdown
     shutdownManager.Shutdown()
-    
+
     // Wait for completion
     shutdownManager.Wait()
     log.Println("Application shutdown complete")
@@ -367,6 +367,6 @@ func main() {
 
 An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
 
-[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
 &nbsp;

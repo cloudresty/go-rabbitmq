@@ -118,13 +118,13 @@ if err != nil {
 // Define message handler
 messageHandler := func(ctx context.Context, delivery *rabbitmq.Delivery) error {
     log.Printf("Received message: %s", string(delivery.Body))
-    
+
     // Process the message
     if err := processStreamMessage(delivery); err != nil {
         log.Printf("Failed to process message: %v", err)
         return err
     }
-    
+
     // Acknowledge the message
     return delivery.Ack()
 }
@@ -162,14 +162,14 @@ func (es *EventStore) AppendEvent(ctx context.Context, streamName string, event 
     if err != nil {
         return err
     }
-    
+
     // Create message with event metadata
     message := rabbitmq.NewMessage(data).
         WithContentType("application/json").
         WithHeader("event_type", reflect.TypeOf(event).Name()).
         WithHeader("event_version", "1.0").
         WithTimestamp(time.Now())
-    
+
     // Append to stream
     return es.handler.PublishToStream(ctx, streamName, message)
 }
@@ -194,13 +194,13 @@ type MetricsCollector struct {
 
 func NewMetricsCollector(client *rabbitmq.Client, streamName string) *MetricsCollector {
     handler := streams.NewHandler(client)
-    
+
     // Create stream with time-based retention
     config := rabbitmq.StreamConfig{
         MaxAge: 7 * 24 * time.Hour, // Keep 7 days of metrics
     }
     handler.CreateStream(context.Background(), streamName, config)
-    
+
     return &MetricsCollector{
         handler:    handler,
         streamName: streamName,
@@ -212,13 +212,13 @@ func (mc *MetricsCollector) PublishMetric(ctx context.Context, metric Metric) er
     if err != nil {
         return err
     }
-    
+
     message := rabbitmq.NewMessage(data).
         WithContentType("application/json").
         WithHeader("metric_type", metric.Type).
         WithHeader("timestamp", metric.Timestamp.Unix()).
         WithTimestamp(metric.Timestamp)
-    
+
     return mc.handler.PublishToStream(ctx, mc.streamName, message)
 }
 ```
@@ -276,25 +276,25 @@ for streamName := range streams {
 // High-throughput publishing with batching
 func publishBatchToStream(handler *streams.Handler, streamName string, events []Event) error {
     ctx := context.Background()
-    
+
     for _, event := range events {
         data, err := json.Marshal(event)
         if err != nil {
             return err
         }
-        
+
         message := rabbitmq.NewMessage(data).
             WithContentType("application/json").
             WithHeader("event_id", event.ID).
             WithTimestamp(event.Timestamp)
-        
+
         // Publish each event (streams handle high throughput well)
         if err := handler.PublishToStream(ctx, streamName, message); err != nil {
             log.Printf("Failed to publish event %s: %v", event.ID, err)
             // Continue with other events or implement retry logic
         }
     }
-    
+
     return nil
 }
 
@@ -316,23 +316,23 @@ if err != nil {
 // Consumer with manual offset management
 func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
     var lastProcessedOffset uint64
-    
+
     messageHandler := func(ctx context.Context, delivery *rabbitmq.Delivery) error {
         // Process message
         if err := processMessage(delivery); err != nil {
             log.Printf("Failed to process message: %v", err)
             return err
         }
-        
+
         // Track offset (in real implementation, persist this)
         if offset := getMessageOffset(delivery); offset > lastProcessedOffset {
             lastProcessedOffset = offset
             log.Printf("Processed message at offset: %d", offset)
         }
-        
+
         return delivery.Ack()
     }
-    
+
     // Start consuming
     err := handler.ConsumeFromStream(context.Background(), streamName, messageHandler)
     if err != nil {
@@ -368,6 +368,6 @@ func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
 
 An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
 
-[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+[Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
 &nbsp;
