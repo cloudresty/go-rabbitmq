@@ -115,21 +115,31 @@ Each sub-package implements core interfaces defined in the root package, enablin
 
 **Zero-configuration production readiness** - this library uses enterprise-grade defaults out of the box:
 
-### 🏗️ **Quorum Queues by Default**
+&nbsp;
+
+### Quorum Queues by Default
 
 - **High Availability**: Built-in replication across cluster nodes
-- **Data Safety**: No message loss during node failures  
+- **Data Safety**: No message loss during node failures
 - **Poison Message Protection**: Automatic delivery limits prevent infinite redelivery loops
 - **Better Performance**: Optimized for throughput in clustered environments
 
-### 💀 **Dead Letter Queues (DLQ) Enabled**
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Dead Letter Queues (DLQ) Enabled
 
 - **Automatic Creation**: DLX and DLQ created automatically with sensible naming
 - **7-Day TTL**: Messages retained in DLQ for 7 days by default
 - **Custom Configuration**: Easy customization of suffixes and TTL
 - **Error Handling**: Failed messages automatically routed for investigation
 
-### 🎛️ **Easy Customization**
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Easy Customization
 
 ```go
 // Default: Quorum queue with DLQ (production-ready)
@@ -151,7 +161,11 @@ queue, _ := admin.DeclareQueue(ctx, "legacy",
 
 **Benefits**: Get enterprise-grade reliability, availability, and error handling with zero configuration while maintaining full control when needed.
 
-### 🔄 **Migration from Previous Versions**
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
+### Migration from Previous Versions
 
 Existing code continues to work unchanged! The new defaults only affect newly declared queues:
 
@@ -162,9 +176,9 @@ admin.DeclareQueue(ctx, "my-queue")
 // To maintain exact previous behavior (classic queue with DLQ)
 admin.DeclareQueue(ctx, "my-queue", rabbitmq.WithClassicQueue())
 
-// To get old behavior (classic queue without DLQ) 
-admin.DeclareQueue(ctx, "my-queue", 
-    rabbitmq.WithClassicQueue(), 
+// To get old behavior (classic queue without DLQ)
+admin.DeclareQueue(ctx, "my-queue",
+    rabbitmq.WithClassicQueue(),
     rabbitmq.WithoutDLQ(),
 )
 ```

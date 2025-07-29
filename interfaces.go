@@ -75,27 +75,38 @@ func (f *FixedDelay) NextDelay(attempt int) time.Duration {
 }
 
 // Logger interface for structured logging
+// Users can implement this interface to integrate their preferred logging solution.
 type Logger interface {
-	Debug(msg string, fields ...Field)
-	Info(msg string, fields ...Field)
-	Warn(msg string, fields ...Field)
-	Error(msg string, fields ...Field)
+	// Debug logs a debug message with optional structured fields
+	Debug(msg string, fields ...any)
+
+	// Info logs an informational message with optional structured fields
+	Info(msg string, fields ...any)
+
+	// Warn logs a warning message with optional structured fields
+	Warn(msg string, fields ...any)
+
+	// Error logs an error message with optional structured fields
+	Error(msg string, fields ...any)
 }
 
-// Field represents a structured log field
-type Field struct {
-	Key   string
-	Value any
-}
-
-// NopLogger is a no-operation logger
+// NopLogger is a no-operation logger that produces no output.
+// This is used as the default logger when no logger is provided.
 type NopLogger struct{}
 
-func (n *NopLogger) Debug(msg string, fields ...Field) {}
-func (n *NopLogger) Info(msg string, fields ...Field)  {}
-func (n *NopLogger) Warn(msg string, fields ...Field)  {}
-func (n *NopLogger) Error(msg string, fields ...Field) {}
+// Debug implements Logger.Debug with no operation
+func (n *NopLogger) Debug(msg string, fields ...any) {}
 
+// Info implements Logger.Info with no operation
+func (n *NopLogger) Info(msg string, fields ...any) {}
+
+// Warn implements Logger.Warn with no operation
+func (n *NopLogger) Warn(msg string, fields ...any) {}
+
+// Error implements Logger.Error with no operation
+func (n *NopLogger) Error(msg string, fields ...any) {}
+
+// NewNopLogger creates a new no-operation logger
 func NewNopLogger() Logger {
 	return &NopLogger{}
 }

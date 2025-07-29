@@ -40,7 +40,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudresty/emit"
 	"github.com/cloudresty/go-rabbitmq"
 	"github.com/cloudresty/ulid"
 )
@@ -116,10 +115,16 @@ type Config struct {
 	CompensateQueue      string // Queue for saga compensation
 	StepHandlers         map[string]StepHandler
 	CompensationHandlers map[string]CompensationHandler
+	Logger               rabbitmq.Logger
 }
 
 // NewManager creates a new saga manager
 func NewManager(client *rabbitmq.Client, store Store, config Config) (*Manager, error) {
+	// Provide default logger if none specified
+	if config.Logger == nil {
+		config.Logger = rabbitmq.NewNopLogger()
+	}
+
 	// Create publisher for saga coordination
 	publisher, err := client.NewPublisher(
 		rabbitmq.WithDefaultExchange(config.SagaExchange),
@@ -150,10 +155,10 @@ func NewManager(client *rabbitmq.Client, store Store, config Config) (*Manager, 
 		stopCh:    make(chan struct{}),
 	}
 
-	emit.Info.StructuredFields("Saga manager created",
-		emit.ZString("saga_exchange", config.SagaExchange),
-		emit.ZString("step_queue", config.StepQueue),
-		emit.ZString("compensate_queue", config.CompensateQueue))
+	config.Logger.Info("Saga manager created",
+		"saga_exchange", config.SagaExchange,
+		"step_queue", config.StepQueue,
+		"compensate_queue", config.CompensateQueue)
 
 	return manager, nil
 }
@@ -199,10 +204,10 @@ func (sm *Manager) Start(ctx context.Context, name string, steps []Step, sagaCon
 		}
 	}
 
-	emit.Info.StructuredFields("Saga started",
-		emit.ZString("saga_id", saga.ID),
-		emit.ZString("saga_name", saga.Name),
-		emit.ZInt("step_count", len(saga.Steps)))
+	sm.config.Logger.Info("Saga started",
+		"saga_id", saga.ID,
+		"saga_name", saga.Name,
+		"step_count", len(saga.Steps))
 
 	return saga, nil
 }
@@ -232,9 +237,9 @@ func (sm *Manager) Compensate(ctx context.Context, sagaID string) error {
 		}
 	}
 
-	emit.Info.StructuredFields("Saga compensation started",
-		emit.ZString("saga_id", saga.ID),
-		emit.ZString("saga_name", saga.Name))
+	sm.config.Logger.Info("Saga compensation started",
+		"saga_id", saga.ID,
+		"saga_name", saga.Name)
 
 	return nil
 }
@@ -521,7 +526,7 @@ func (sm *Manager) Run(ctx context.Context) error {
 	sm.running = true
 	defer func() { sm.running = false }()
 
-	emit.Info.Msg("Starting saga orchestration engine")
+	sm.config.Logger.Info("Starting saga orchestration engine")
 
 	// Start consuming step execution messages
 	stepErr := make(chan error, 1)
@@ -541,23 +546,23 @@ func (sm *Manager) Run(ctx context.Context) error {
 		}
 	}()
 
-	emit.Info.StructuredFields("Saga orchestration engine started",
-		emit.ZString("step_queue", sm.config.StepQueue),
-		emit.ZString("compensate_queue", sm.config.CompensateQueue))
+	sm.config.Logger.Info("Saga orchestration engine started",
+		"step_queue", sm.config.StepQueue,
+		"compensate_queue", sm.config.CompensateQueue)
 
 	// Wait for context cancellation or error
 	select {
 	case <-ctx.Done():
-		emit.Info.Msg("Saga orchestration engine stopping due to context cancellation")
+		sm.config.Logger.Info("Saga orchestration engine stopping due to context cancellation")
 		return ctx.Err()
 	case <-sm.stopCh:
-		emit.Info.Msg("Saga orchestration engine stopping due to stop signal")
+		sm.config.Logger.Info("Saga orchestration engine stopping due to stop signal")
 		return nil
 	case err := <-stepErr:
-		emit.Error.StructuredFields("Saga step consumer error", emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Saga step consumer error", "error", err.Error())
 		return err
 	case err := <-compensationErr:
-		emit.Error.StructuredFields("Saga compensation consumer error", emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Saga compensation consumer error", "error", err.Error())
 		return err
 	}
 }
@@ -566,8 +571,8 @@ func (sm *Manager) Run(ctx context.Context) error {
 func (sm *Manager) handleStepMessage(ctx context.Context, delivery *rabbitmq.Delivery) error {
 	defer func() {
 		if r := recover(); r != nil {
-			emit.Error.StructuredFields("Panic in step message handler",
-				emit.ZString("error", fmt.Sprintf("%v", r)))
+			sm.config.Logger.Error("Panic in step message handler",
+				"error", fmt.Sprintf("%v", r))
 		}
 	}()
 
@@ -581,42 +586,42 @@ func (sm *Manager) handleStepMessage(ctx context.Context, delivery *rabbitmq.Del
 	}
 
 	if err := json.Unmarshal(delivery.Body, &stepMessage); err != nil {
-		emit.Error.StructuredFields("Failed to unmarshal step message",
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Failed to unmarshal step message",
+			"error", err.Error())
 		return fmt.Errorf("failed to unmarshal step message: %w", err)
 	}
 
-	emit.Info.StructuredFields("Processing step execution",
-		emit.ZString("saga_id", stepMessage.SagaID),
-		emit.ZString("step_id", stepMessage.StepID),
-		emit.ZString("action", stepMessage.Step.Action))
+	sm.config.Logger.Info("Processing step execution",
+		"saga_id", stepMessage.SagaID,
+		"step_id", stepMessage.StepID,
+		"action", stepMessage.Step.Action)
 
 	// Look up the step handler
 	handler, exists := sm.config.StepHandlers[stepMessage.Step.Action]
 	if !exists {
-		emit.Error.StructuredFields("No handler found for step action",
-			emit.ZString("action", stepMessage.Step.Action),
-			emit.ZString("saga_id", stepMessage.SagaID),
-			emit.ZString("step_id", stepMessage.StepID))
+		sm.config.Logger.Error("No handler found for step action",
+			"action", stepMessage.Step.Action,
+			"saga_id", stepMessage.SagaID,
+			"step_id", stepMessage.StepID)
 
 		// Mark step as failed due to missing handler
 		_, err := sm.store.UpdateSagaStep(ctx, stepMessage.SagaID, stepMessage.StepID,
 			StateFailed, nil, fmt.Sprintf("no handler found for action: %s", stepMessage.Step.Action))
 		if err != nil {
-			emit.Error.StructuredFields("Failed to update step status",
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update step status",
+				"error", err.Error())
 		}
 
 		// Mark saga as failed and start compensation
 		if _, err := sm.store.UpdateSagaState(ctx, stepMessage.SagaID, StateFailed); err != nil {
-			emit.Error.StructuredFields("Failed to update saga state to failed",
-				emit.ZString("saga_id", stepMessage.SagaID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update saga state to failed",
+				"saga_id", stepMessage.SagaID,
+				"error", err.Error())
 		}
 		if err := sm.Compensate(ctx, stepMessage.SagaID); err != nil {
-			emit.Error.StructuredFields("Failed to start compensation",
-				emit.ZString("saga_id", stepMessage.SagaID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to start compensation",
+				"saga_id", stepMessage.SagaID,
+				"error", err.Error())
 		}
 		return nil // Message processed successfully even though step failed
 	}
@@ -626,45 +631,45 @@ func (sm *Manager) handleStepMessage(ctx context.Context, delivery *rabbitmq.Del
 
 	if err != nil {
 		// Step failed - mark as failed and start compensation
-		emit.Error.StructuredFields("Step execution failed",
-			emit.ZString("saga_id", stepMessage.SagaID),
-			emit.ZString("step_id", stepMessage.StepID),
-			emit.ZString("action", stepMessage.Step.Action),
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Step execution failed",
+			"saga_id", stepMessage.SagaID,
+			"step_id", stepMessage.StepID,
+			"action", stepMessage.Step.Action,
+			"error", err.Error())
 
 		_, updateErr := sm.store.UpdateSagaStep(ctx, stepMessage.SagaID, stepMessage.StepID,
 			StateFailed, nil, err.Error())
 		if updateErr != nil {
-			emit.Error.StructuredFields("Failed to update failed step",
-				emit.ZString("error", updateErr.Error()))
+			sm.config.Logger.Error("Failed to update failed step",
+				"error", updateErr.Error())
 			return updateErr
 		}
 
 		// Mark saga as failed and start compensation
 		if _, err := sm.store.UpdateSagaState(ctx, stepMessage.SagaID, StateFailed); err != nil {
-			emit.Error.StructuredFields("Failed to update saga state to failed",
-				emit.ZString("saga_id", stepMessage.SagaID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update saga state to failed",
+				"saga_id", stepMessage.SagaID,
+				"error", err.Error())
 		}
 		if err := sm.Compensate(ctx, stepMessage.SagaID); err != nil {
-			emit.Error.StructuredFields("Failed to start compensation",
-				emit.ZString("saga_id", stepMessage.SagaID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to start compensation",
+				"saga_id", stepMessage.SagaID,
+				"error", err.Error())
 		}
 		return nil // Message processed successfully even though step failed
 	}
 
 	// Step succeeded - mark as completed
-	emit.Info.StructuredFields("Step execution completed",
-		emit.ZString("saga_id", stepMessage.SagaID),
-		emit.ZString("step_id", stepMessage.StepID),
-		emit.ZString("action", stepMessage.Step.Action))
+	sm.config.Logger.Info("Step execution completed",
+		"saga_id", stepMessage.SagaID,
+		"step_id", stepMessage.StepID,
+		"action", stepMessage.Step.Action)
 
 	updatedSaga, err := sm.store.UpdateSagaStep(ctx, stepMessage.SagaID, stepMessage.StepID,
 		StateCompleted, stepMessage.Step.Output, "")
 	if err != nil {
-		emit.Error.StructuredFields("Failed to update completed step",
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Failed to update completed step",
+			"error", err.Error())
 		return err
 	}
 
@@ -673,22 +678,22 @@ func (sm *Manager) handleStepMessage(ctx context.Context, delivery *rabbitmq.Del
 	if nextStep != nil {
 		// Publish next step
 		if err := sm.publishStep(ctx, updatedSaga, nextStep); err != nil {
-			emit.Error.StructuredFields("Failed to publish next step",
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to publish next step",
+				"error", err.Error())
 			return err
 		}
 	} else {
 		// All steps completed - mark saga as completed
 		_, err := sm.store.UpdateSagaState(ctx, stepMessage.SagaID, StateCompleted)
 		if err != nil {
-			emit.Error.StructuredFields("Failed to mark saga as completed",
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to mark saga as completed",
+				"error", err.Error())
 			return err
 		}
 
-		emit.Info.StructuredFields("Saga completed successfully",
-			emit.ZString("saga_id", stepMessage.SagaID),
-			emit.ZString("saga_name", updatedSaga.Name))
+		sm.config.Logger.Info("Saga completed successfully",
+			"saga_id", stepMessage.SagaID,
+			"saga_name", updatedSaga.Name)
 	}
 
 	return nil
@@ -698,8 +703,8 @@ func (sm *Manager) handleStepMessage(ctx context.Context, delivery *rabbitmq.Del
 func (sm *Manager) handleCompensationMessage(ctx context.Context, delivery *rabbitmq.Delivery) error {
 	defer func() {
 		if r := recover(); r != nil {
-			emit.Error.StructuredFields("Panic in compensation message handler",
-				emit.ZString("error", fmt.Sprintf("%v", r)))
+			sm.config.Logger.Error("Panic in compensation message handler",
+				"error", fmt.Sprintf("%v", r))
 		}
 	}()
 
@@ -713,31 +718,31 @@ func (sm *Manager) handleCompensationMessage(ctx context.Context, delivery *rabb
 	}
 
 	if err := json.Unmarshal(delivery.Body, &compensationMessage); err != nil {
-		emit.Error.StructuredFields("Failed to unmarshal compensation message",
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Failed to unmarshal compensation message",
+			"error", err.Error())
 		return fmt.Errorf("failed to unmarshal compensation message: %w", err)
 	}
 
-	emit.Info.StructuredFields("Processing step compensation",
-		emit.ZString("saga_id", compensationMessage.SagaID),
-		emit.ZString("step_id", compensationMessage.StepID),
-		emit.ZString("compensation", compensationMessage.Step.Compensation))
+	sm.config.Logger.Info("Processing step compensation",
+		"saga_id", compensationMessage.SagaID,
+		"step_id", compensationMessage.StepID,
+		"compensation", compensationMessage.Step.Compensation)
 
 	// Look up the compensation handler
 	handler, exists := sm.config.CompensationHandlers[compensationMessage.Step.Compensation]
 	if !exists {
-		emit.Error.StructuredFields("No compensation handler found",
-			emit.ZString("compensation", compensationMessage.Step.Compensation),
-			emit.ZString("saga_id", compensationMessage.SagaID),
-			emit.ZString("step_id", compensationMessage.StepID))
+		sm.config.Logger.Error("No compensation handler found",
+			"compensation", compensationMessage.Step.Compensation,
+			"saga_id", compensationMessage.SagaID,
+			"step_id", compensationMessage.StepID)
 
 		// Mark step as compensated even without handler (best effort)
 		if _, err := sm.store.UpdateSagaStep(ctx, compensationMessage.SagaID, compensationMessage.StepID,
 			StateCompensated, nil, fmt.Sprintf("no compensation handler found for: %s", compensationMessage.Step.Compensation)); err != nil {
-			emit.Error.StructuredFields("Failed to update step as compensated",
-				emit.ZString("saga_id", compensationMessage.SagaID),
-				emit.ZString("step_id", compensationMessage.StepID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update step as compensated",
+				"saga_id", compensationMessage.SagaID,
+				"step_id", compensationMessage.StepID,
+				"error", err.Error())
 		}
 		return nil
 	}
@@ -746,41 +751,41 @@ func (sm *Manager) handleCompensationMessage(ctx context.Context, delivery *rabb
 	err := handler(ctx, &compensationMessage.Saga, &compensationMessage.Step)
 
 	if err != nil {
-		emit.Error.StructuredFields("Compensation execution failed",
-			emit.ZString("saga_id", compensationMessage.SagaID),
-			emit.ZString("step_id", compensationMessage.StepID),
-			emit.ZString("compensation", compensationMessage.Step.Compensation),
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Compensation execution failed",
+			"saga_id", compensationMessage.SagaID,
+			"step_id", compensationMessage.StepID,
+			"compensation", compensationMessage.Step.Compensation,
+			"error", err.Error())
 
 		// Mark compensation as failed but continue (best effort compensation)
 		if _, err := sm.store.UpdateSagaStep(ctx, compensationMessage.SagaID, compensationMessage.StepID,
 			StateCompensated, nil, fmt.Sprintf("compensation failed: %s", err.Error())); err != nil {
-			emit.Error.StructuredFields("Failed to update failed compensation",
-				emit.ZString("saga_id", compensationMessage.SagaID),
-				emit.ZString("step_id", compensationMessage.StepID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update failed compensation",
+				"saga_id", compensationMessage.SagaID,
+				"step_id", compensationMessage.StepID,
+				"error", err.Error())
 		}
 	} else {
-		emit.Info.StructuredFields("Compensation execution completed",
-			emit.ZString("saga_id", compensationMessage.SagaID),
-			emit.ZString("step_id", compensationMessage.StepID),
-			emit.ZString("compensation", compensationMessage.Step.Compensation))
+		sm.config.Logger.Info("Compensation execution completed",
+			"saga_id", compensationMessage.SagaID,
+			"step_id", compensationMessage.StepID,
+			"compensation", compensationMessage.Step.Compensation)
 
 		// Mark step as compensated
 		if _, err := sm.store.UpdateSagaStep(ctx, compensationMessage.SagaID, compensationMessage.StepID,
 			StateCompensated, nil, ""); err != nil {
-			emit.Error.StructuredFields("Failed to update step as compensated",
-				emit.ZString("saga_id", compensationMessage.SagaID),
-				emit.ZString("step_id", compensationMessage.StepID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update step as compensated",
+				"saga_id", compensationMessage.SagaID,
+				"step_id", compensationMessage.StepID,
+				"error", err.Error())
 		}
 	}
 
 	// Check if all eligible steps have been compensated
 	saga, err := sm.store.LoadSaga(ctx, compensationMessage.SagaID)
 	if err != nil {
-		emit.Error.StructuredFields("Failed to load saga for compensation check",
-			emit.ZString("error", err.Error()))
+		sm.config.Logger.Error("Failed to load saga for compensation check",
+			"error", err.Error())
 		return nil
 	}
 
@@ -795,13 +800,13 @@ func (sm *Manager) handleCompensationMessage(ctx context.Context, delivery *rabb
 	if allCompensated {
 		// Mark saga as fully compensated
 		if _, err := sm.store.UpdateSagaState(ctx, compensationMessage.SagaID, StateCompensated); err != nil {
-			emit.Error.StructuredFields("Failed to update saga state to compensated",
-				emit.ZString("saga_id", compensationMessage.SagaID),
-				emit.ZString("error", err.Error()))
+			sm.config.Logger.Error("Failed to update saga state to compensated",
+				"saga_id", compensationMessage.SagaID,
+				"error", err.Error())
 		}
-		emit.Info.StructuredFields("Saga fully compensated",
-			emit.ZString("saga_id", compensationMessage.SagaID),
-			emit.ZString("saga_name", saga.Name))
+		sm.config.Logger.Info("Saga fully compensated",
+			"saga_id", compensationMessage.SagaID,
+			"saga_name", saga.Name)
 	}
 
 	return nil
