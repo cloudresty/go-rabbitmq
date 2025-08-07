@@ -990,7 +990,7 @@ func main() {
 
 - **Publisher Confirmations**: Broker acknowledgments for message delivery guarantees
 - **Consumer Acknowledgments**: Manual message acknowledgment with retry control
-- **Dead Letter Queues**: Automatic handling of failed message processing
+- **Dead Letter Queues**: Manual configuration for failed message processing
 - **Message Persistence**: Durable message storage surviving broker restarts
 - **Delivery Tracking**: Comprehensive delivery status and retry monitoring
 - **Mandatory Publishing**: Ensures messages reach bound queues

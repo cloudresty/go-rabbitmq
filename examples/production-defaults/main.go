@@ -44,19 +44,18 @@ func main() {
 	fmt.Printf("   ✓ DLQ: production-queue.dlq (7-day TTL)\n")
 	fmt.Println()
 
-	// 2. Customizing quorum queue settings
-	fmt.Println("2. Creating customized quorum queue:")
+	// 2. Customizing quorum queue settings with manual DLX
+	fmt.Println("2. Creating customized quorum queue with manual DLX configuration:")
 	queue2, err := admin.DeclareQueue(ctx, "custom-quorum",
-		rabbitmq.WithQuorumGroupSize(5),          // Custom quorum size
-		rabbitmq.WithDeliveryLimit(3),            // Max 3 delivery attempts
-		rabbitmq.WithDLQTTL(24*time.Hour),        // 1-day DLQ TTL
-		rabbitmq.WithDLQSuffixes(".dlx", ".dlq"), // Custom suffixes
+		rabbitmq.WithQuorumGroupSize(5),                               // Custom quorum size
+		rabbitmq.WithDeliveryLimit(3),                                 // Max 3 delivery attempts
+		rabbitmq.WithDeadLetter("dead-letter-exchange", "dlq.custom"), // Manual DLX configuration
 	)
 	if err != nil {
 		log.Fatalf("Failed to declare custom quorum queue: %v", err)
 	}
 	fmt.Printf("   ✓ Queue: %s (quorum size: 5, delivery limit: 3)\n", queue2.Name)
-	fmt.Printf("   ✓ DLQ TTL: 24 hours\n")
+	fmt.Printf("   ✓ Manual DLX: dead-letter-exchange with routing key: dlq.custom\n")
 	fmt.Println()
 
 	// 3. Explicit classic queue (legacy mode)

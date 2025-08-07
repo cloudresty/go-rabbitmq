@@ -79,11 +79,6 @@ type queueConfig struct {
 	MaxLengthBytes       int64
 	DeadLetterExchange   string
 	DeadLetterRoutingKey string
-	// DLQ support (enabled by default)
-	EnableDLQ     bool
-	DLXSuffix     string
-	DLQSuffix     string
-	DLQMessageTTL time.Duration
 	// Queue type control (quorum by default for production)
 	UseClassicQueue bool
 }
@@ -212,25 +207,11 @@ func WithDeadLetterTTL(ttl time.Duration) QueueOption {
 	}
 }
 
-// WithoutDLQ disables automatic dead letter queue creation
+// WithoutDLQ clears any dead letter configuration
 func WithoutDLQ() QueueOption {
 	return func(config *queueConfig) {
-		config.EnableDLQ = false
-	}
-}
-
-// WithDLQSuffixes customizes the DLX and DLQ naming suffixes
-func WithDLQSuffixes(dlxSuffix, dlqSuffix string) QueueOption {
-	return func(config *queueConfig) {
-		config.DLXSuffix = dlxSuffix
-		config.DLQSuffix = dlqSuffix
-	}
-}
-
-// WithDLQTTL sets the TTL for messages in the dead letter queue
-func WithDLQTTL(ttl time.Duration) QueueOption {
-	return func(config *queueConfig) {
-		config.DLQMessageTTL = ttl
+		config.DeadLetterExchange = ""
+		config.DeadLetterRoutingKey = ""
 	}
 }
 
@@ -285,25 +266,19 @@ func WithQuorumDeliveryLimit(limit int) QuorumQueueOption {
 	}
 }
 
-// WithoutQuorumDLQ disables automatic dead letter queue creation for quorum queues
+// WithoutQuorumDLQ clears any dead letter configuration for quorum queues
 func WithoutQuorumDLQ() QuorumQueueOption {
 	return func(config *quorumQueueConfig) {
-		config.EnableDLQ = false
+		config.DeadLetterExchange = ""
+		config.DeadLetterRoutingKey = ""
 	}
 }
 
-// WithQuorumDLQSuffixes customizes the DLX and DLQ naming suffixes for quorum queues
-func WithQuorumDLQSuffixes(dlxSuffix, dlqSuffix string) QuorumQueueOption {
+// WithQuorumDeadLetter sets the dead letter exchange and routing key for quorum queues
+func WithQuorumDeadLetter(exchange, routingKey string) QuorumQueueOption {
 	return func(config *quorumQueueConfig) {
-		config.DLXSuffix = dlxSuffix
-		config.DLQSuffix = dlqSuffix
-	}
-}
-
-// WithQuorumDLQTTL sets the TTL for messages in the dead letter queue for quorum queues
-func WithQuorumDLQTTL(ttl time.Duration) QuorumQueueOption {
-	return func(config *quorumQueueConfig) {
-		config.DLQMessageTTL = ttl
+		config.DeadLetterExchange = exchange
+		config.DeadLetterRoutingKey = routingKey
 	}
 }
 
@@ -368,7 +343,7 @@ func WithBindingArguments(args Table) BindingOption {
 
 // AdminService methods
 
-// DeclareQueue declares a queue with the given options (Quorum queue with DLQ enabled by default)
+// DeclareQueue declares a queue with the given options (Quorum queue by default)
 func (a *AdminService) DeclareQueue(ctx context.Context, name string, opts ...QueueOption) (*Queue, error) {
 	config := &queueConfig{
 		Durable:    true, // Default to durable
@@ -376,11 +351,6 @@ func (a *AdminService) DeclareQueue(ctx context.Context, name string, opts ...Qu
 		Exclusive:  false,
 		NoWait:     false,
 		Arguments:  make(Table),
-		// DLQ enabled by default for production-ready queues
-		EnableDLQ:     true,
-		DLXSuffix:     ".dlx",
-		DLQSuffix:     ".dlq",
-		DLQMessageTTL: 7 * 24 * time.Hour, // 7 days default
 		// Quorum queues by default for production reliability
 		UseClassicQueue: false,
 	}
@@ -392,38 +362,11 @@ func (a *AdminService) DeclareQueue(ctx context.Context, name string, opts ...Qu
 
 	// Decide queue type based on configuration
 	if !config.UseClassicQueue {
-		// Default: Use quorum queue with DLQ
+		// Default: Use quorum queue
 		return a.declareQuorumQueueFromConfig(ctx, name, config)
 	}
 
 	// Classic queue path (only when explicitly requested)
-	if config.EnableDLQ {
-		// Convert to QueueConfig for DLQ support
-		queueConfig := QueueConfig{
-			Name:          name,
-			Durable:       config.Durable,
-			AutoDelete:    config.AutoDelete,
-			Exclusive:     config.Exclusive,
-			NoWait:        config.NoWait,
-			Arguments:     map[string]any(config.Arguments),
-			QueueType:     QueueTypeClassic,
-			AutoCreateDLX: true,
-			DLXSuffix:     config.DLXSuffix,
-			DLQSuffix:     config.DLQSuffix,
-			DLQMessageTTL: int(config.DLQMessageTTL.Milliseconds()),
-		}
-
-		// Add any dead letter configuration from old-style options
-		if config.DeadLetterExchange != "" {
-			queueConfig.DeadLetterExchange = config.DeadLetterExchange
-			queueConfig.DeadLetterRoutingKey = config.DeadLetterRoutingKey
-			queueConfig.AutoCreateDLX = false // Use custom DLX instead
-		}
-
-		return a.DeclareQueueWithDLQ(ctx, queueConfig)
-	}
-
-	// Legacy path - classic queue without DLQ
 	return a.declareQueueLegacy(ctx, name, config)
 }
 
@@ -460,7 +403,7 @@ func (a *AdminService) declareQueueLegacy(ctx context.Context, name string, conf
 
 // declareQuorumQueueFromConfig handles quorum queue declaration from queueConfig (internal method)
 func (a *AdminService) declareQuorumQueueFromConfig(ctx context.Context, name string, config *queueConfig) (*Queue, error) {
-	// Convert to QueueConfig for quorum queue with DLQ support
+	// Convert to QueueConfig for quorum queue
 	queueConfig := DefaultQuorumQueueConfig(name)
 
 	// Apply configuration from queueConfig
@@ -468,27 +411,29 @@ func (a *AdminService) declareQuorumQueueFromConfig(ctx context.Context, name st
 	queueConfig.AutoDelete = config.AutoDelete
 	queueConfig.Exclusive = config.Exclusive
 	queueConfig.NoWait = config.NoWait
-	queueConfig.DLXSuffix = config.DLXSuffix
-	queueConfig.DLQSuffix = config.DLQSuffix
-	queueConfig.DLQMessageTTL = int(config.DLQMessageTTL.Milliseconds())
-	queueConfig.AutoCreateDLX = config.EnableDLQ
 
 	// Add any custom arguments
 	for k, v := range config.Arguments {
 		queueConfig.Arguments[k] = v
 	}
 
-	// Add any dead letter configuration from old-style options
+	// Add any dead letter configuration
 	if config.DeadLetterExchange != "" {
 		queueConfig.DeadLetterExchange = config.DeadLetterExchange
 		queueConfig.DeadLetterRoutingKey = config.DeadLetterRoutingKey
-		queueConfig.AutoCreateDLX = false // Use custom DLX instead
 	}
 
-	return a.DeclareQueueWithDLQ(ctx, queueConfig)
+	// Use simple quorum queue declaration
+	// Convert queueConfig to quorumQueueConfig for consistency
+	quorumConfig := &quorumQueueConfig{
+		queueConfig:      *config,
+		InitialGroupSize: 3, // Default quorum size
+	}
+	quorumConfig.Arguments["x-queue-type"] = "quorum"
+	return a.declareQuorumQueueLegacy(ctx, name, quorumConfig)
 }
 
-// DeclareQuorumQueue declares a quorum queue with the given options (DLQ enabled by default)
+// DeclareQuorumQueue declares a quorum queue with the given options
 func (a *AdminService) DeclareQuorumQueue(ctx context.Context, name string, opts ...QuorumQueueOption) (*Queue, error) {
 	config := &quorumQueueConfig{
 		queueConfig: queueConfig{
@@ -497,11 +442,6 @@ func (a *AdminService) DeclareQuorumQueue(ctx context.Context, name string, opts
 			Exclusive:  false,
 			NoWait:     false,
 			Arguments:  make(Table),
-			// DLQ enabled by default for production-ready queues
-			EnableDLQ:     true,
-			DLXSuffix:     ".dlx",
-			DLQSuffix:     ".dlq",
-			DLQMessageTTL: 7 * 24 * time.Hour, // 7 days default
 		},
 		InitialGroupSize: 3, // Default quorum size
 	}
@@ -514,37 +454,7 @@ func (a *AdminService) DeclareQuorumQueue(ctx context.Context, name string, opts
 		opt(config)
 	}
 
-	// If DLQ is enabled, use the full QueueConfig approach
-	if config.EnableDLQ {
-		// Convert to QueueConfig for DLQ support
-		queueConfig := DefaultQuorumQueueConfig(name)
-
-		// Apply configuration from options
-		queueConfig.Durable = config.Durable
-		queueConfig.AutoDelete = config.AutoDelete
-		queueConfig.Exclusive = config.Exclusive
-		queueConfig.NoWait = config.NoWait
-		queueConfig.DLXSuffix = config.DLXSuffix
-		queueConfig.DLQSuffix = config.DLQSuffix
-		queueConfig.DLQMessageTTL = int(config.DLQMessageTTL.Milliseconds())
-		queueConfig.ReplicationFactor = config.InitialGroupSize
-
-		// Add any custom arguments
-		for k, v := range config.Arguments {
-			queueConfig.Arguments[k] = v
-		}
-
-		// Add any dead letter configuration from old-style options
-		if config.DeadLetterExchange != "" {
-			queueConfig.DeadLetterExchange = config.DeadLetterExchange
-			queueConfig.DeadLetterRoutingKey = config.DeadLetterRoutingKey
-			queueConfig.AutoCreateDLX = false // Use custom DLX instead
-		}
-
-		return a.DeclareQueueWithDLQ(ctx, queueConfig)
-	}
-
-	// Legacy path - no DLQ (only when explicitly disabled)
+	// Use simple quorum queue declaration
 	return a.declareQuorumQueueLegacy(ctx, name, config)
 }
 
@@ -1005,7 +915,7 @@ func (a *AdminService) SetupTopology(ctx context.Context, exchanges []ExchangeCo
 	return nil
 }
 
-// DeclareQueueWithDLQ declares a queue using QueueConfig with automatic DLX/DLQ creation
+// DeclareQueueWithDLQ declares a queue using QueueConfig (simplified - no auto-creation)
 func (a *AdminService) DeclareQueueWithDLQ(ctx context.Context, config QueueConfig) (*Queue, error) {
 	// Get channel
 	ch, err := a.client.getChannel()
@@ -1016,55 +926,7 @@ func (a *AdminService) DeclareQueueWithDLQ(ctx context.Context, config QueueConf
 		_ = ch.Close() // Ignore close error in defer
 	}()
 
-	// Create DLX and DLQ if auto-creation is enabled
-	if config.AutoCreateDLX {
-		// 1. Create Dead Letter Exchange
-		dlxConfig := config.GetDLXConfig()
-		if dlxConfig.Name != "" {
-			err = ch.ExchangeDeclare(
-				dlxConfig.Name,
-				string(dlxConfig.Type),
-				dlxConfig.Durable,
-				dlxConfig.AutoDelete,
-				dlxConfig.Internal,
-				dlxConfig.NoWait,
-				amqp.Table(dlxConfig.Arguments),
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to declare dead letter exchange %s: %w", dlxConfig.Name, err)
-			}
-		}
-
-		// 2. Create Dead Letter Queue
-		dlqConfig := config.GetDLQConfig()
-		if dlqConfig.Name != "" {
-			_, err = ch.QueueDeclare(
-				dlqConfig.Name,
-				dlqConfig.Durable,
-				dlqConfig.AutoDelete,
-				dlqConfig.Exclusive,
-				dlqConfig.NoWait,
-				amqp.Table(dlqConfig.ToArguments()),
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to declare dead letter queue %s: %w", dlqConfig.Name, err)
-			}
-
-			// 3. Bind DLQ to DLX
-			err = ch.QueueBind(
-				dlqConfig.Name, // queue name
-				dlqConfig.Name, // routing key (same as queue name for direct exchange)
-				dlxConfig.Name, // exchange name
-				false,          // no-wait
-				nil,            // arguments
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to bind dead letter queue %s to exchange %s: %w", dlqConfig.Name, dlxConfig.Name, err)
-			}
-		}
-	}
-
-	// 4. Declare main queue (with DLX configuration in arguments)
+	// Simply declare the main queue (no auto-creation of DLX/DLQ)
 	queue, err := ch.QueueDeclare(
 		config.Name,
 		config.Durable,
@@ -1074,7 +936,7 @@ func (a *AdminService) DeclareQueueWithDLQ(ctx context.Context, config QueueConf
 		amqp.Table(config.ToArguments()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to declare main queue %s: %w", config.Name, err)
+		return nil, fmt.Errorf("failed to declare queue %s: %w", config.Name, err)
 	}
 
 	return &Queue{
