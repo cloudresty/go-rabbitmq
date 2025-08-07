@@ -1,12 +1,12 @@
 # Production Defaults Example
 
-This example demonstrates the enterprise-ready defaults in the go-rabbitmq library.
+This example demonstrates the production-ready defaults and queue configuration options in the go-rabbitmq library.
 
 ## What This Example Shows
 
 - **Quorum Queues by Default**: All queues are created as quorum queues for high availability
-- **Automatic DLQ**: Dead Letter Queues are created automatically with sensible defaults
-- **Easy Customization**: Simple options to customize quorum and DLQ settings
+- **Manual Dead Letter Configuration**: Full control over dead letter exchange and routing setup
+- **Easy Customization**: Simple options to customize quorum settings
 - **Legacy Compatibility**: How to opt into classic queue behavior when needed
 
 ## Running the Example
@@ -27,36 +27,32 @@ This example demonstrates the enterprise-ready defaults in the go-rabbitmq libra
 
 The example creates several queues to demonstrate different configurations:
 
-1. **production-queue** - Default quorum queue with DLQ
+1. **production-queue** - Default quorum queue
    - Queue type: Quorum
-   - DLX: `production-queue.dlx`
-   - DLQ: `production-queue.dlq` (7-day TTL)
+   - High availability with replication
 
 2. **custom-quorum** - Customized quorum queue
    - Quorum size: 5 nodes
    - Delivery limit: 3 attempts
-   - DLQ TTL: 24 hours
 
-3. **legacy-classic** - Classic queue for compatibility
-   - Queue type: Classic
-   - Still has DLQ enabled
-   - Message TTL: 1 hour
-
-4. **no-dlq-queue** - Queue without DLQ (edge case)
+3. **dlq-example** - Queue with manual dead letter configuration
    - Queue type: Quorum
-   - No dead letter handling
+   - Dead letter exchange: `errors.dlx`
+   - Dead letter routing key: `failed`
+
+4. **legacy-classic** - Classic queue for compatibility
+   - Queue type: Classic
+   - Message TTL: 1 hour
 
 5. **explicit-quorum** - Using DeclareQuorumQueue method
    - Equivalent to default behavior now
    - Custom delivery limit: 5
 
-## Key Benefits Demonstrated
+## Key Benefits
 
-- **Zero Configuration**: Production-ready queues with no setup
-- **High Availability**: Quorum consensus prevents data loss
-- **Poison Message Protection**: Delivery limits prevent infinite loops
-- **Error Handling**: Failed messages automatically routed to DLQ
-- **Easy Migration**: Legacy behavior available via simple options
+- **High Availability**: Quorum queues provide replication and fault tolerance
+- **User Control**: Complete control over topology and dead letter configuration
+- **Flexibility**: Mix and match different queue types and configurations as needed
 
 ## Inspecting Results
 

@@ -63,12 +63,6 @@ type QueueConfig struct {
 	MessageTTL           int       // Message TTL in milliseconds (0 = no TTL)
 	DeadLetterExchange   string    // Dead letter exchange name
 	DeadLetterRoutingKey string    // Dead letter routing key
-	// Dead Letter Infrastructure (NEW)
-	AutoCreateDLX bool   // Automatically create dead letter exchange and queue (default: true)
-	DLXSuffix     string // Suffix for DLX name (default: ".dlx")
-	DLQSuffix     string // Suffix for DLQ name (default: ".dlq")
-	DLQMaxLength  int    // Max length for dead letter queue (0 = unlimited)
-	DLQMessageTTL int    // TTL for messages in DLQ in milliseconds (0 = no TTL, default: 7 days)
 }
 
 // DefaultQuorumQueueConfig returns a production-ready quorum queue configuration
@@ -87,12 +81,6 @@ func DefaultQuorumQueueConfig(name string) QueueConfig {
 		MaxLengthBytes:    0,     // Unlimited
 		MessageTTL:        0,     // No TTL
 		Arguments:         make(map[string]any),
-		// Dead Letter Infrastructure (enabled by default)
-		AutoCreateDLX: true,
-		DLXSuffix:     ".dlx",
-		DLQSuffix:     ".dlq",
-		DLQMaxLength:  0,                       // Unlimited
-		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
 
 }
@@ -113,12 +101,6 @@ func DefaultHAQueueConfig(name string) QueueConfig {
 		MaxLengthBytes:    0, // Unlimited
 		MessageTTL:        0, // No TTL
 		Arguments:         make(map[string]any),
-		// Dead Letter Infrastructure (enabled by default)
-		AutoCreateDLX: true,
-		DLXSuffix:     ".dlx",
-		DLQSuffix:     ".dlq",
-		DLQMaxLength:  0,                       // Unlimited
-		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
 
 }
@@ -139,12 +121,6 @@ func DefaultClassicQueueConfig(name string) QueueConfig {
 		MaxLengthBytes:    0,
 		MessageTTL:        0,
 		Arguments:         make(map[string]any),
-		// Dead Letter Infrastructure (enabled by default)
-		AutoCreateDLX: true,
-		DLXSuffix:     ".dlx",
-		DLQSuffix:     ".dlq",
-		DLQMaxLength:  0,                       // Unlimited
-		DLQMessageTTL: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
 	}
 
 }
@@ -191,16 +167,6 @@ func (q *QueueConfig) ToArguments() map[string]any {
 		args["x-dead-letter-exchange"] = q.DeadLetterExchange
 		if q.DeadLetterRoutingKey != "" {
 			args["x-dead-letter-routing-key"] = q.DeadLetterRoutingKey
-		}
-	} else if q.AutoCreateDLX {
-		// Auto-configure dead letter exchange if enabled
-		dlxName := q.Name + q.DLXSuffix
-		args["x-dead-letter-exchange"] = dlxName
-		if q.DeadLetterRoutingKey != "" {
-			args["x-dead-letter-routing-key"] = q.DeadLetterRoutingKey
-		} else {
-			// Use the DLQ name as routing key for direct exchange
-			args["x-dead-letter-routing-key"] = q.Name + q.DLQSuffix
 		}
 	}
 
@@ -593,106 +559,18 @@ func NewConsumeError(message string, cause error) *Error {
 
 }
 
-// GetDLXName returns the dead letter exchange name for this queue config
-func (q *QueueConfig) GetDLXName() string {
-
-	if q.DeadLetterExchange != "" {
-		return q.DeadLetterExchange
-	}
-	if q.AutoCreateDLX {
-		return q.Name + q.DLXSuffix
-	}
-	return ""
-
-}
-
-// GetDLQName returns the dead letter queue name for this queue config
-func (q *QueueConfig) GetDLQName() string {
-
-	if q.AutoCreateDLX {
-		return q.Name + q.DLQSuffix
-	}
-	return ""
-
-}
-
-// GetDLQConfig returns a QueueConfig for the dead letter queue
-func (q *QueueConfig) GetDLQConfig() QueueConfig {
-
-	if !q.AutoCreateDLX {
-		return QueueConfig{} // Return empty config if DLX is disabled
-	}
-
-	dlqConfig := QueueConfig{
-		Name:              q.GetDLQName(),
-		Durable:           q.Durable, // Same durability as main queue
-		AutoDelete:        false,     // Never auto-delete DLQs
-		Exclusive:         false,     // DLQs should be accessible
-		NoWait:            q.NoWait,
-		QueueType:         q.QueueType, // Same type as main queue
-		HighAvailability:  q.HighAvailability,
-		ReplicationFactor: q.ReplicationFactor,
-		MaxLength:         q.DLQMaxLength,
-		MaxLengthBytes:    0, // No byte limit on DLQ
-		MessageTTL:        q.DLQMessageTTL,
-		Arguments:         make(map[string]any),
-		// Disable auto-DLX for DLQ to prevent infinite loops
-		AutoCreateDLX:      false,
-		DeadLetterExchange: "", // No DLX for the DLQ itself
-	}
-
-	return dlqConfig
-
-}
-
-// GetDLXConfig returns an ExchangeConfig for the dead letter exchange
-func (q *QueueConfig) GetDLXConfig() ExchangeConfig {
-
-	if !q.AutoCreateDLX {
-		return ExchangeConfig{} // Return empty config if DLX is disabled
-	}
-
-	return ExchangeConfig{
-		Name:       q.GetDLXName(),
-		Type:       ExchangeTypeDirect, // Use direct exchange for DLX
-		Durable:    q.Durable,          // Same durability as main queue
-		AutoDelete: false,              // Never auto-delete DLX
-		Internal:   false,
-		NoWait:     q.NoWait,
-		Arguments:  make(map[string]any),
-	}
-
-}
-
-// WithoutDeadLetter disables automatic dead letter infrastructure creation
+// WithoutDeadLetter clears any dead letter configuration
 func (q *QueueConfig) WithoutDeadLetter() *QueueConfig {
-
-	q.AutoCreateDLX = false
 	q.DeadLetterExchange = ""
 	q.DeadLetterRoutingKey = ""
 	return q
-
 }
 
-// WithDeadLetter enables and configures dead letter infrastructure
-func (q *QueueConfig) WithDeadLetter(dlxSuffix, dlqSuffix string, dlqTTLDays int) *QueueConfig {
-
-	q.AutoCreateDLX = true
-	q.DLXSuffix = dlxSuffix
-	q.DLQSuffix = dlqSuffix
-	q.DLQMessageTTL = dlqTTLDays * 24 * 60 * 60 * 1000 // Convert days to milliseconds
-	return q
-
-}
-
-// WithCustomDeadLetter configures a custom dead letter exchange (disables auto-creation)
+// WithCustomDeadLetter configures a custom dead letter exchange
 func (q *QueueConfig) WithCustomDeadLetter(dlxName, routingKey string) *QueueConfig {
-
-	q.AutoCreateDLX = false
 	q.DeadLetterExchange = dlxName
 	q.DeadLetterRoutingKey = routingKey
 	return q
-
 }
 
 // Validate checks if the message is valid for publishing
