@@ -292,7 +292,6 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 	}
 
 	// Check if the actual configuration matches our registry
-	needsRecreation := false
 	actualDLE := ""
 	actualDLRK := ""
 	if actualInfo.Arguments != nil {
@@ -308,38 +307,18 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 		}
 	}
 
-	// Check for configuration mismatches that require recreation
+	// Check for configuration mismatches that require registry updates
 	if actualDLE != config.DeadLetterExchange || actualDLRK != config.DeadLetterRoutingKey {
-		needsRecreation = true
 		if v.client.config.Logger != nil {
-			v.client.config.Logger.Error("Queue configuration mismatch detected, will recreate",
+			v.client.config.Logger.Info("Queue configuration differs from registry, updating registry to match reality",
 				"queue", name,
 				"expected_dle", config.DeadLetterExchange,
 				"actual_dle", actualDLE,
 				"expected_dlrk", config.DeadLetterRoutingKey,
 				"actual_dlrk", actualDLRK)
 		}
-	}
 
-	if needsRecreation && v.IsAutoRecreateEnabled() {
-		// Delete and recreate with correct configuration
-		if err := v.admin.DeleteQueue(context.TODO(), name); err != nil {
-			if v.client.config.Logger != nil {
-				v.client.config.Logger.Error("Failed to delete mismatched queue",
-					"queue", name,
-					"error", err)
-			}
-			return fmt.Errorf("failed to delete mismatched queue '%s': %w", name, err)
-		}
-
-		// Recreate with correct configuration
-		return v.recreateQueue(config)
-	} else if needsRecreation {
-		return fmt.Errorf("queue '%s' has configuration mismatch and auto-recreation is disabled", name)
-	}
-
-	// Configuration matches or recreation not needed, update registry with actual config
-	if actualDLE != config.DeadLetterExchange || actualDLRK != config.DeadLetterRoutingKey {
+		// Update registry to match actual configuration instead of forcing recreation
 		updatedConfig := config
 		updatedConfig.DeadLetterExchange = actualDLE
 		updatedConfig.DeadLetterRoutingKey = actualDLRK
