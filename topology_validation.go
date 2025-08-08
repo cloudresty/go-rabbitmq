@@ -250,6 +250,25 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 		return nil
 	}
 
+	// First, validate dependent exchanges (like dead-letter-exchange)
+	if config.DeadLetterExchange != "" {
+		if err := v.ValidateExchange(config.DeadLetterExchange); err != nil {
+			return fmt.Errorf("failed to validate dead-letter-exchange '%s' for queue '%s': %w",
+				config.DeadLetterExchange, name, err)
+		}
+	}
+
+	// Also validate exchanges that this queue is bound to
+	bindings := v.registry.ListBindings()
+	for _, binding := range bindings {
+		if binding.QueueName == name {
+			if err := v.ValidateExchange(binding.ExchangeName); err != nil {
+				return fmt.Errorf("failed to validate exchange '%s' bound to queue '%s': %w",
+					binding.ExchangeName, name, err)
+			}
+		}
+	}
+
 	// Check if queue exists using passive declaration
 	exists, err := v.admin.QueueExists(context.TODO(), name)
 	if err != nil {
@@ -340,7 +359,7 @@ func (v *TopologyValidator) backgroundValidationLoop() {
 
 // performBackgroundValidation validates all registered topology
 func (v *TopologyValidator) performBackgroundValidation() {
-	// Validate all registered exchanges
+	// Validate all registered exchanges first (queues may depend on them)
 	for _, exchange := range v.registry.ListExchanges() {
 		if err := v.ValidateExchange(exchange.Name); err != nil {
 			// Log error (using client's logger if available)
