@@ -283,7 +283,14 @@ func (v *TopologyValidator) recreateExchange(config ExchangeConfig) error {
 		opts = append(opts, WithExchangeArguments(config.Arguments))
 	}
 
-	return v.admin.DeclareExchange(context.TODO(), config.Name, config.Type, opts...)
+	// Recreate the exchange
+	err := v.admin.DeclareExchange(context.TODO(), config.Name, config.Type, opts...)
+	if err != nil {
+		return err
+	}
+
+	// Restore all bindings for this exchange
+	return v.recreateExchangeBindings(config.Name)
 }
 
 // recreateQueue recreates a missing queue
@@ -306,8 +313,14 @@ func (v *TopologyValidator) recreateQueue(config QueueConfig) error {
 		opts = append(opts, WithDeadLetter(config.DeadLetterExchange, config.DeadLetterRoutingKey))
 	}
 
+	// Recreate the queue
 	_, err := v.admin.DeclareQueue(context.TODO(), config.Name, opts...)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Restore all bindings for this queue
+	return v.recreateQueueBindings(config.Name)
 }
 
 // backgroundValidationLoop runs periodic topology validation in the background
@@ -350,4 +363,44 @@ func (v *TopologyValidator) performBackgroundValidation() {
 			}
 		}
 	}
+}
+
+// recreateQueueBindings restores all bindings for a specific queue
+func (v *TopologyValidator) recreateQueueBindings(queueName string) error {
+	bindings := v.registry.ListBindings()
+	for _, binding := range bindings {
+		if binding.QueueName == queueName {
+			var opts []BindingOption
+			if len(binding.Arguments) > 0 {
+				opts = append(opts, WithBindingArguments(binding.Arguments))
+			}
+
+			err := v.admin.BindQueue(context.TODO(), binding.QueueName, binding.ExchangeName, binding.RoutingKey, opts...)
+			if err != nil {
+				return fmt.Errorf("failed to restore binding %s->%s:%s: %w",
+					binding.QueueName, binding.ExchangeName, binding.RoutingKey, err)
+			}
+		}
+	}
+	return nil
+}
+
+// recreateExchangeBindings restores all bindings for a specific exchange
+func (v *TopologyValidator) recreateExchangeBindings(exchangeName string) error {
+	bindings := v.registry.ListBindings()
+	for _, binding := range bindings {
+		if binding.ExchangeName == exchangeName {
+			var opts []BindingOption
+			if len(binding.Arguments) > 0 {
+				opts = append(opts, WithBindingArguments(binding.Arguments))
+			}
+
+			err := v.admin.BindQueue(context.TODO(), binding.QueueName, binding.ExchangeName, binding.RoutingKey, opts...)
+			if err != nil {
+				return fmt.Errorf("failed to restore binding %s->%s:%s: %w",
+					binding.QueueName, binding.ExchangeName, binding.RoutingKey, err)
+			}
+		}
+	}
+	return nil
 }
