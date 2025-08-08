@@ -258,6 +258,11 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 
 	if !exists {
 		if v.IsAutoRecreateEnabled() {
+			// Before recreating the queue, ensure dependent exchanges exist
+			if err := v.validateQueueDependencies(config); err != nil {
+				return fmt.Errorf("failed to validate queue dependencies for '%s': %w", name, err)
+			}
+
 			// Auto-recreate the queue
 			return v.recreateQueue(config)
 		}
@@ -402,5 +407,27 @@ func (v *TopologyValidator) recreateExchangeBindings(exchangeName string) error 
 			}
 		}
 	}
+	return nil
+}
+
+// validateQueueDependencies ensures all dependent exchanges exist before queue recreation
+func (v *TopologyValidator) validateQueueDependencies(config QueueConfig) error {
+	// Validate dead-letter exchange if configured
+	if config.DeadLetterExchange != "" {
+		if err := v.ValidateExchange(config.DeadLetterExchange); err != nil {
+			return fmt.Errorf("failed to validate dead-letter exchange '%s': %w", config.DeadLetterExchange, err)
+		}
+	}
+
+	// Validate any bindings this queue depends on
+	bindings := v.registry.ListBindings()
+	for _, binding := range bindings {
+		if binding.QueueName == config.Name {
+			if err := v.ValidateExchange(binding.ExchangeName); err != nil {
+				return fmt.Errorf("failed to validate exchange '%s' for binding: %w", binding.ExchangeName, err)
+			}
+		}
+	}
+
 	return nil
 }
