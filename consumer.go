@@ -196,6 +196,13 @@ func WithDeadLetterPolicy(policy DeadLetterPolicy) ConsumeOption {
 
 // Consume starts consuming messages from the specified queue with optional settings
 func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHandler, opts ...ConsumeOption) error {
+	// Validate topology if enabled
+	if c.client.TopologyValidator() != nil {
+		if err := c.client.TopologyValidator().ValidateQueue(queue); err != nil {
+			return fmt.Errorf("topology validation failed for queue '%s': %w", queue, err)
+		}
+	}
+
 	// Default consume configuration
 	consumeConfig := &consumeConfig{
 		RejectRequeue:    false,

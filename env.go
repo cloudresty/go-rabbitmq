@@ -52,6 +52,12 @@ type EnvConfig struct {
 	ConsumerAutoAck         bool          `env:"RABBITMQ_CONSUMER_AUTO_ACK,default=false"`
 	ConsumerMessageTimeout  time.Duration `env:"RABBITMQ_CONSUMER_MESSAGE_TIMEOUT,default=5m"`
 	ConsumerShutdownTimeout time.Duration `env:"RABBITMQ_CONSUMER_SHUTDOWN_TIMEOUT,default=30s"`
+
+	// Topology validation and auto-healing (enabled by default for production reliability)
+	TopologyValidation           bool          `env:"RABBITMQ_TOPOLOGY_VALIDATION,default=true"`
+	TopologyAutoRecreation       bool          `env:"RABBITMQ_TOPOLOGY_AUTO_RECREATION,default=true"`
+	TopologyBackgroundValidation bool          `env:"RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION,default=true"`
+	TopologyValidationInterval   time.Duration `env:"RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL,default=30s"`
 }
 
 // BuildAMQPURL constructs the AMQP connection URL from environment configuration
@@ -187,6 +193,12 @@ func applyEnvConfigToClient(config *clientConfig, envConfig *EnvConfig) error {
 		Multiplier:   2.0,
 		MaxAttempts:  envConfig.RetryAttempts,
 	}
+
+	// Topology validation settings (production-ready defaults)
+	config.TopologyValidation = envConfig.TopologyValidation
+	config.TopologyAutoRecreation = envConfig.TopologyAutoRecreation
+	config.TopologyBackgroundValidation = envConfig.TopologyBackgroundValidation
+	config.TopologyValidationInterval = envConfig.TopologyValidationInterval
 
 	return nil
 }

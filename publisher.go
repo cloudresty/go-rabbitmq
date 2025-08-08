@@ -128,6 +128,13 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 		exchange = p.config.DefaultExchange
 	}
 
+	// Validate topology if enabled
+	if p.client.TopologyValidator() != nil && exchange != "" {
+		if err := p.client.TopologyValidator().ValidateExchange(exchange); err != nil {
+			return fmt.Errorf("topology validation failed for exchange '%s': %w", exchange, err)
+		}
+	}
+
 	// Apply publisher defaults to message if not set
 	if p.config.Persistent && !message.Persistent {
 		message = message.Clone()

@@ -295,3 +295,81 @@ func TestingReconnectPolicy() ReconnectPolicy {
 		MaxAttempts: 3,
 	}
 }
+
+// Topology validation options
+
+// WithTopologyValidation enables topology validation
+// When enabled, the client will track declared topology and validate it before operations
+func WithTopologyValidation() Option {
+	return func(config *clientConfig) error {
+		config.TopologyValidation = true
+		return nil
+	}
+}
+
+// WithTopologyAutoRecreation enables automatic recreation of missing topology
+// Requires TopologyValidation to be enabled
+func WithTopologyAutoRecreation() Option {
+	return func(config *clientConfig) error {
+		config.TopologyAutoRecreation = true
+		return nil
+	}
+}
+
+// WithTopologyBackgroundValidation enables background topology validation
+// with a custom interval. Background validation is enabled by default (30s interval).
+// Requires TopologyValidation to be enabled
+func WithTopologyBackgroundValidation(interval time.Duration) Option {
+	return func(config *clientConfig) error {
+		if interval <= 0 {
+			return fmt.Errorf("validation interval must be positive")
+		}
+		config.TopologyBackgroundValidation = true
+		config.TopologyValidationInterval = interval
+		return nil
+	}
+}
+
+// WithTopologyValidationInterval sets the background validation interval
+// This is a convenience method that automatically enables background validation
+func WithTopologyValidationInterval(interval time.Duration) Option {
+	return func(config *clientConfig) error {
+		if interval <= 0 {
+			return fmt.Errorf("validation interval must be positive")
+		}
+		config.TopologyBackgroundValidation = true
+		config.TopologyValidationInterval = interval
+		return nil
+	}
+}
+
+// Opt-out topology validation options (for advanced users)
+
+// WithoutTopologyValidation disables topology validation
+// This disables all topology tracking, validation, and auto-recreation
+func WithoutTopologyValidation() Option {
+	return func(config *clientConfig) error {
+		config.TopologyValidation = false
+		config.TopologyAutoRecreation = false
+		config.TopologyBackgroundValidation = false
+		return nil
+	}
+}
+
+// WithoutTopologyAutoRecreation disables automatic recreation while keeping validation
+// Topology will be validated but not automatically recreated if missing
+func WithoutTopologyAutoRecreation() Option {
+	return func(config *clientConfig) error {
+		config.TopologyAutoRecreation = false
+		return nil
+	}
+}
+
+// WithoutTopologyBackgroundValidation disables background validation while keeping on-demand validation
+// Topology will be validated before operations but not periodically validated in the background
+func WithoutTopologyBackgroundValidation() Option {
+	return func(config *clientConfig) error {
+		config.TopologyBackgroundValidation = false
+		return nil
+	}
+}

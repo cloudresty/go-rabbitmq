@@ -88,6 +88,7 @@ Each sub-package implements core interfaces defined in the root package, enablin
 
 ### Production-Ready Features
 
+- **Topology Auto-Healing**: Automatic topology validation and recreation enabled by default
 - **Connection Pooling**: Distribute load across multiple connections with health monitoring
 - **Message Encryption**: AES-256-GCM encryption with secure key management
 - **Compression**: Gzip/Zlib compression with configurable thresholds
@@ -137,11 +138,24 @@ This library provides a straightforward approach to queue configuration with use
 
 &nbsp;
 
+### Topology Auto-Healing (Enabled by Default)
+
+- **Automatic Validation**: Every publish/consume operation validates topology exists
+- **Auto-Recreation**: Missing exchanges, queues, and bindings are automatically recreated  
+- **Background Monitoring**: Periodic validation every 30 seconds (default, customizable)
+- **Zero Configuration**: Works out of the box - no setup required
+
+🔝 [back to top](#go-rabbitmq)
+
+&nbsp;
+
 ### Easy Customization
 
 ```go
-// Default: Quorum queue (production-ready)
-queue, _ := admin.DeclareQueue(ctx, "orders")
+// Default: Auto-healing quorum queue (production-ready!)
+client, _ := rabbitmq.NewClient(rabbitmq.FromEnv())
+admin := client.Admin()
+queue, _ := admin.DeclareQueue(ctx, "orders")  // Automatically tracked & protected
 
 // Custom quorum settings
 queue, _ := admin.DeclareQueue(ctx, "payments",
@@ -149,9 +163,23 @@ queue, _ := admin.DeclareQueue(ctx, "payments",
     rabbitmq.WithDeliveryLimit(3),         // Max retry attempts
 )
 
-// With dead letter configuration
+// With dead letter configuration  
 queue, _ := admin.DeclareQueue(ctx, "processing",
     rabbitmq.WithDeadLetter("errors.dlx", "failed"), // Manual DLX setup
+)
+
+// Advanced users can opt-out if needed
+client, _ := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithoutTopologyValidation(),            // Disable auto-healing
+    rabbitmq.WithoutTopologyAutoRecreation(),        // Keep validation, disable auto-recreation
+    rabbitmq.WithoutTopologyBackgroundValidation(),  // Disable background monitoring only
+)
+
+// Or customize the background validation interval
+client, _ := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithTopologyValidationInterval(10*time.Second), // Custom interval
 )
 
 // Legacy compatibility (opt-in)
@@ -179,7 +207,7 @@ import (
 )
 
 func main() {
-    // Create a basic client
+    // Create a basic client (topology auto-healing enabled by default!)
     client, err := rabbitmq.NewClient(
         rabbitmq.WithHosts("localhost:5672"),
         rabbitmq.WithCredentials("guest", "guest"),
@@ -190,13 +218,13 @@ func main() {
     }
     defer client.Close()
 
-    // Declare a queue - uses quorum type by default (production-ready!)
+    // Declare a queue - automatically tracked and protected from deletion!
     admin := client.Admin()
     queue, err := admin.DeclareQueue(context.Background(), "user-events")
     if err != nil {
         log.Fatal("Failed to declare queue:", err)
     }
-    log.Printf("Created production-ready queue: %s", queue.Name)
+    log.Printf("Created auto-healing production queue: %s", queue.Name)
 
     // Create a publisher
     publisher, err := client.NewPublisher(
@@ -295,6 +323,10 @@ shutdownManager.SetupSignalHandler()
 ### Production Defaults Demo
 
 See [examples/production-defaults/](examples/production-defaults/) for a comprehensive demonstration of the production-ready defaults including quorum queues, dead letter configuration, and customization options.
+
+### Topology Auto-Healing Demo  
+
+See [examples/topology-features/](examples/topology-features/) for a comprehensive demonstration of topology validation, auto-recreation, environment configuration, and opt-out options.
 
 ### Complete Feature Integration
 

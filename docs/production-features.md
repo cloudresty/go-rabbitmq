@@ -13,6 +13,7 @@ This document covers all production-ready features designed for high-availabilit
 - [Auto-Reconnection](#auto-reconnection)
 - [Multi-Host Failover](#multi-host-failover)
 - [Health Monitoring](#health-monitoring)
+- [Topology Auto-Healing](#topology-auto-healing)
 - [Connection Pooling](#connection-pooling)
 - [Graceful Shutdown](#graceful-shutdown)
 - [Message Reliability](#message-reliability)
@@ -312,6 +313,130 @@ func main() {
 - **Cluster Status**: Health status across multiple cluster nodes
 - **Timeout Protection**: Configurable timeouts prevent hanging health checks
 - **Integration Ready**: Easy integration with monitoring systems and alerting
+
+🔝 [back to top](#production-features)
+
+&nbsp;
+
+## Topology Auto-Healing
+
+Enterprise-grade topology validation and automatic recreation for maximum reliability. Ensures your exchanges, queues, and bindings remain consistent even if deleted externally.
+
+&nbsp;
+
+### Default Auto-Healing Behavior
+
+Topology validation is enabled by default with zero configuration required:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Auto-healing enabled by default - no configuration needed!
+    client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
+    if err != nil {
+        log.Fatal("Failed to create client:", err)
+    }
+    defer client.Close()
+
+    admin := client.Admin()
+    ctx := context.Background()
+
+    // Declare topology - automatically tracked for validation
+    err = admin.DeclareExchange(ctx, "orders", rabbitmq.ExchangeTypeTopic,
+        rabbitmq.WithExchangeDurable(),
+    )
+    if err != nil {
+        log.Fatal("Failed to declare exchange:", err)
+    }
+
+    queue, err := admin.DeclareQueue(ctx, "order-processing",
+        rabbitmq.WithDurable(),
+    )
+    if err != nil {
+        log.Fatal("Failed to declare queue:", err)
+    }
+
+    // Binding automatically registered for monitoring
+    err = admin.BindQueue(ctx, queue.Name, "orders", "order.*")
+    if err != nil {
+        log.Fatal("Failed to bind queue:", err)
+    }
+
+    // All operations now validate topology exists before executing
+    // If deleted externally, topology is automatically recreated
+    log.Println("Topology declared and protected by auto-healing")
+}
+```
+
+&nbsp;
+
+### Environment Configuration (Topology)
+
+Configure topology validation through environment variables:
+
+```bash
+# Enable/disable topology validation (default: true)
+RABBITMQ_TOPOLOGY_VALIDATION=true
+
+# Enable/disable automatic recreation (default: true)
+RABBITMQ_TOPOLOGY_AUTO_RECREATION=true
+
+# Enable/disable background monitoring (default: true)
+RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION=true
+
+# Background validation interval (default: 30s)
+RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL=30s
+```
+
+&nbsp;
+
+### Custom Configuration
+
+Advanced users can customize topology validation behavior:
+
+```go
+// Custom validation interval for critical systems
+client, err := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithTopologyValidationInterval(10*time.Second), // More frequent validation
+)
+
+// Disable background validation only
+client, err := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithoutTopologyBackgroundValidation(), // Keep operation-time validation
+)
+
+// Disable auto-recreation, keep validation
+client, err := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithoutTopologyAutoRecreation(), // Validate but don't recreate
+)
+
+// Disable all topology features (advanced users only)
+client, err := rabbitmq.NewClient(
+    rabbitmq.FromEnv(),
+    rabbitmq.WithoutTopologyValidation(), // Completely disable
+)
+```
+
+&nbsp;
+
+### Production Benefits
+
+- **Zero Downtime**: Operations continue seamlessly even when topology is deleted externally
+- **Automatic Recovery**: Missing exchanges, queues, and bindings are recreated transparently
+- **Background Monitoring**: Periodic validation catches issues before they affect operations
+- **Production Ready**: Enabled by default with sensible intervals for enterprise use
+- **Configurable**: Full control over validation behavior for different environments
 
 🔝 [back to top](#production-features)
 

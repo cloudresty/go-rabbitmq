@@ -394,6 +394,21 @@ func (a *AdminService) declareQueueLegacy(ctx context.Context, name string, conf
 		return nil, fmt.Errorf("failed to declare queue %s: %w", name, err)
 	}
 
+	// Register topology if validation is enabled
+	if a.client.TopologyRegistry() != nil {
+		queueConfig := QueueConfig{
+			Name:                 name,
+			Durable:              config.Durable,
+			AutoDelete:           config.AutoDelete,
+			Exclusive:            config.Exclusive,
+			QueueType:            QueueTypeClassic,
+			Arguments:            config.Arguments,
+			DeadLetterExchange:   config.DeadLetterExchange,
+			DeadLetterRoutingKey: config.DeadLetterRoutingKey,
+		}
+		a.client.TopologyRegistry().RegisterQueue(queueConfig)
+	}
+
 	return &Queue{
 		Name:      queue.Name,
 		Messages:  queue.Messages,
@@ -482,6 +497,21 @@ func (a *AdminService) declareQuorumQueueLegacy(ctx context.Context, name string
 		return nil, fmt.Errorf("failed to declare quorum queue %s: %w", name, err)
 	}
 
+	// Register topology if validation is enabled
+	if a.client.TopologyRegistry() != nil {
+		queueConfig := QueueConfig{
+			Name:                 name,
+			Durable:              config.Durable,
+			AutoDelete:           config.AutoDelete,
+			Exclusive:            config.Exclusive,
+			QueueType:            QueueTypeQuorum,
+			Arguments:            config.Arguments,
+			DeadLetterExchange:   config.DeadLetterExchange,
+			DeadLetterRoutingKey: config.DeadLetterRoutingKey,
+		}
+		a.client.TopologyRegistry().RegisterQueue(queueConfig)
+	}
+
 	return &Queue{
 		Name:      queue.Name,
 		Messages:  queue.Messages,
@@ -525,6 +555,19 @@ func (a *AdminService) DeclareExchange(ctx context.Context, name string, kind Ex
 	)
 	if err != nil {
 		return fmt.Errorf("failed to declare exchange %s: %w", name, err)
+	}
+
+	// Register topology if validation is enabled
+	if a.client.TopologyRegistry() != nil {
+		exchangeConfig := ExchangeConfig{
+			Name:       name,
+			Type:       kind,
+			Durable:    config.Durable,
+			AutoDelete: config.AutoDelete,
+			Internal:   config.Internal,
+			Arguments:  config.Arguments,
+		}
+		a.client.TopologyRegistry().RegisterExchange(exchangeConfig)
 	}
 
 	return nil
@@ -676,6 +719,40 @@ func (a *AdminService) ExchangeInfo(ctx context.Context, name string) (*Exchange
 	}, nil
 }
 
+// ExchangeExists checks if an exchange exists using passive declaration
+func (a *AdminService) ExchangeExists(ctx context.Context, name string) (bool, error) {
+	ch, err := a.client.getChannel()
+	if err != nil {
+		return false, fmt.Errorf("failed to get channel: %w", err)
+	}
+	defer func() { _ = ch.Close() }()
+
+	// Try to declare the exchange passively
+	err = ch.ExchangeDeclarePassive(name, "", false, false, false, false, nil)
+	if err != nil {
+		// Exchange doesn't exist or other error
+		return false, nil
+	}
+	return true, nil
+}
+
+// QueueExists checks if a queue exists using passive declaration
+func (a *AdminService) QueueExists(ctx context.Context, name string) (bool, error) {
+	ch, err := a.client.getChannel()
+	if err != nil {
+		return false, fmt.Errorf("failed to get channel: %w", err)
+	}
+	defer func() { _ = ch.Close() }()
+
+	// Try to declare the queue passively
+	_, err = ch.QueueDeclarePassive(name, false, false, false, false, nil)
+	if err != nil {
+		// Queue doesn't exist or other error
+		return false, nil
+	}
+	return true, nil
+}
+
 // BindQueue binds a queue to an exchange with optional binding options
 func (a *AdminService) BindQueue(ctx context.Context, queue, exchange, routingKey string, opts ...BindingOption) error {
 	// Default binding configuration
@@ -699,6 +776,17 @@ func (a *AdminService) BindQueue(ctx context.Context, queue, exchange, routingKe
 	err = ch.QueueBind(queue, routingKey, exchange, config.NoWait, amqp.Table(config.Arguments))
 	if err != nil {
 		return fmt.Errorf("failed to bind queue %s to exchange %s: %w", queue, exchange, err)
+	}
+
+	// Register topology if validation is enabled
+	if a.client.TopologyRegistry() != nil {
+		bindingConfig := BindingConfig{
+			QueueName:    queue,
+			ExchangeName: exchange,
+			RoutingKey:   routingKey,
+			Arguments:    config.Arguments,
+		}
+		a.client.TopologyRegistry().RegisterBinding(bindingConfig)
 	}
 
 	return nil
