@@ -269,7 +269,7 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 		}
 	}
 
-	// Check if queue exists using passive declaration
+	// Check if queue exists and validate its configuration
 	exists, err := v.admin.QueueExists(context.TODO(), name)
 	if err != nil {
 		return fmt.Errorf("failed to check if queue '%s' exists: %w", name, err)
@@ -281,6 +281,39 @@ func (v *TopologyValidator) ValidateQueue(name string) error {
 			return v.recreateQueue(config)
 		}
 		return fmt.Errorf("queue '%s' does not exist and auto-recreation is disabled", name)
+	}
+
+	// Queue exists, but let's verify its configuration matches our registry
+	// This handles cases where queues were created outside this library or with different config
+	actualInfo, err := v.admin.InspectQueue(context.TODO(), name)
+	if err != nil {
+		// If we can't inspect, assume it's fine since it exists
+		return nil
+	}
+
+	// Check if the actual dead-letter configuration matches our registry
+	actualDLE := ""
+	actualDLRK := ""
+	if actualInfo.Arguments != nil {
+		if dle, ok := actualInfo.Arguments["x-dead-letter-exchange"]; ok {
+			if dlExchange, ok := dle.(string); ok {
+				actualDLE = dlExchange
+			}
+		}
+		if dlrk, ok := actualInfo.Arguments["x-dead-letter-routing-key"]; ok {
+			if dlRoutingKey, ok := dlrk.(string); ok {
+				actualDLRK = dlRoutingKey
+			}
+		}
+	}
+
+	// If configuration differs, update our registry to match reality
+	if actualDLE != config.DeadLetterExchange || actualDLRK != config.DeadLetterRoutingKey {
+		updatedConfig := config
+		updatedConfig.DeadLetterExchange = actualDLE
+		updatedConfig.DeadLetterRoutingKey = actualDLRK
+		updatedConfig.Arguments = actualInfo.Arguments
+		v.registry.RegisterQueue(updatedConfig)
 	}
 
 	return nil
