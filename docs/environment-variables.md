@@ -85,6 +85,21 @@ The go-rabbitmq package supports comprehensive configuration through environment
 
 &nbsp;
 
+## Topology Validation and Auto-Healing Settings
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `RABBITMQ_TOPOLOGY_VALIDATION` | Enable topology validation before operations | `true` | `false` |
+| `RABBITMQ_TOPOLOGY_AUTO_RECREATION` | Auto-recreate missing exchanges, queues, and bindings | `true` | `false` |
+| `RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION` | Enable periodic background topology validation | `true` | `false` |
+| `RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL` | Background validation interval | `30s` | `60s` |
+
+These settings provide enterprise-grade reliability by ensuring your topology remains consistent and is automatically recreated if deleted externally.
+
+🔝 [back to top](#environment-variables)
+
+&nbsp;
+
 ## HTTP Management API Settings
 
 | Variable | Description | Default | Example |
@@ -426,6 +441,12 @@ RABBITMQ_MAX_RECONNECT_ATTEMPTS=10
 RABBITMQ_CONSUMER_PREFETCH_COUNT=100
 RABBITMQ_CONSUMER_MESSAGE_TIMEOUT=10m
 RABBITMQ_PUBLISHER_CONFIRMATION_TIMEOUT=10s
+
+# Topology validation (production-ready defaults)
+RABBITMQ_TOPOLOGY_VALIDATION=true
+RABBITMQ_TOPOLOGY_AUTO_RECREATION=true
+RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION=true
+RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL=30s
 ```
 
 🔝 [back to top](#environment-variables)

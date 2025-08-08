@@ -25,6 +25,11 @@ type Client struct {
 	admin     *AdminService
 	adminOnce sync.Once
 
+	// Topology management
+	topologyRegistry  *TopologyRegistry
+	topologyValidator *TopologyValidator
+	topologyOnce      sync.Once
+
 	// Shutdown handling
 	closeCh chan struct{}
 	closeWg sync.WaitGroup
@@ -68,6 +73,12 @@ type clientConfig struct {
 	StreamHandler    StreamHandler
 	SagaOrchestrator SagaOrchestrator
 	GracefulShutdown GracefulShutdown
+
+	// Topology validation
+	TopologyValidation           bool
+	TopologyAutoRecreation       bool
+	TopologyBackgroundValidation bool
+	TopologyValidationInterval   time.Duration
 }
 
 // Option represents a functional option for configuring the Client
@@ -91,6 +102,12 @@ func NewClient(opts ...Option) (*Client, error) {
 		Metrics:              NewNopMetrics(),
 		Tracer:               NewNopTracer(),
 		PerformanceMonitor:   NewNopPerformanceMonitor(),
+
+		// Topology validation enabled by default for production reliability
+		TopologyValidation:           true,
+		TopologyAutoRecreation:       true,
+		TopologyBackgroundValidation: true,
+		TopologyValidationInterval:   30 * time.Second, // 30s default interval
 	}
 
 	// Apply options
@@ -122,6 +139,11 @@ func NewClient(opts ...Option) (*Client, error) {
 		closeCh: make(chan struct{}),
 	}
 
+	// Initialize topology components if validation is enabled
+	if config.TopologyValidation {
+		client.initializeTopology()
+	}
+
 	// Establish initial connection
 	if err := client.connect(); err != nil {
 		return nil, fmt.Errorf("failed to establish connection: %w", err)
@@ -139,6 +161,29 @@ func NewClient(opts ...Option) (*Client, error) {
 		"vhost", config.VHost)
 
 	return client, nil
+}
+
+// initializeTopology initializes topology validation components
+func (c *Client) initializeTopology() {
+	c.topologyOnce.Do(func() {
+		c.topologyRegistry = NewTopologyRegistry()
+		// Note: We'll initialize the validator lazily when Admin() is first called
+		// to avoid circular dependencies during client creation
+	})
+} // TopologyRegistry returns the topology registry for manual topology management
+func (c *Client) TopologyRegistry() *TopologyRegistry {
+	if c.topologyRegistry == nil {
+		return nil
+	}
+	return c.topologyRegistry
+}
+
+// TopologyValidator returns the topology validator for manual validation operations
+func (c *Client) TopologyValidator() *TopologyValidator {
+	if c.topologyValidator == nil {
+		return nil
+	}
+	return c.topologyValidator
 }
 
 // Health and connectivity methods
@@ -210,6 +255,28 @@ func (c *Client) Close() error {
 func (c *Client) Admin() *AdminService {
 	c.adminOnce.Do(func() {
 		c.admin = &AdminService{client: c}
+
+		// Initialize topology validator if validation is enabled
+		if c.config.TopologyValidation && c.topologyValidator == nil {
+			c.topologyValidator = NewTopologyValidator(c, c.admin, c.topologyRegistry)
+
+			// Enable validation
+			c.topologyValidator.Enable()
+
+			// Enable auto-recreation if configured
+			if c.config.TopologyAutoRecreation {
+				c.topologyValidator.EnableAutoRecreate()
+			}
+
+			// Enable background validation if configured
+			if c.config.TopologyBackgroundValidation {
+				interval := c.config.TopologyValidationInterval
+				if interval == 0 {
+					interval = 30 * time.Second // Default interval
+				}
+				c.topologyValidator.EnableBackgroundValidation(interval)
+			}
+		}
 	})
 	return c.admin
 }
