@@ -228,16 +228,19 @@ jobs:
           go test -race -short ./...
 
       - name: Commit and push changes
+        id: commit
         run: |
           if git diff --quiet go.mod go.sum; then
             echo "No changes to commit"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
+          echo "has_changes=true" >> $GITHUB_OUTPUT
           git add go.mod go.sum
 
           # Build commit message with optional reason
-          COMMIT_MSG="chore: update go-rabbitmq dependencies"
+          COMMIT_MSG="chore: update go-elastic dependencies"
           if [ -n "${{ github.event.inputs.reason }}" ]; then
             COMMIT_MSG="$COMMIT_MSG
 
@@ -260,6 +263,7 @@ jobs:
           git push origin develop
 
       - name: Create Pull Request
+        if: steps.commit.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
         run: |
