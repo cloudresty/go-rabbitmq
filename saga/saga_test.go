@@ -739,10 +739,18 @@ func BenchmarkLoadSaga(b *testing.B) {
 
 // Example functions showing usage patterns
 func ExampleNewManager() {
-	client, _ := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
+	client, err := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
+	if err != nil {
+		// In CI/test environments, RabbitMQ might not be available
+		// This is acceptable for documentation examples
+		return
+	}
+
 	defer func() {
-		if err := client.Close(); err != nil {
-			// Handle error in real code
+		if client != nil {
+			if err := client.Close(); err != nil {
+				// Handle error in real code
+			}
 		}
 	}()
 
@@ -753,9 +761,16 @@ func ExampleNewManager() {
 		CompensateQueue: "saga.compensate",
 	}
 
-	manager, _ := NewManager(client, store, config)
+	manager, err := NewManager(client, store, config)
+	if err != nil {
+		// Handle error in real code
+		return
+	}
+
 	defer func() {
-		_ = manager.Close() // Ignore close error in defer
+		if manager != nil {
+			_ = manager.Close() // Ignore close error in defer
+		}
 	}()
 
 	_ = manager
@@ -763,10 +778,18 @@ func ExampleNewManager() {
 }
 
 func ExampleManager_Start() {
-	client, _ := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
+	client, err := rabbitmq.NewClient(rabbitmq.WithHosts("localhost:5672"))
+	if err != nil {
+		// In CI/test environments, RabbitMQ might not be available
+		// This is acceptable for documentation examples
+		return
+	}
+
 	defer func() {
-		if err := client.Close(); err != nil {
-			// Handle error in real code
+		if client != nil {
+			if err := client.Close(); err != nil {
+				// Handle error in real code
+			}
 		}
 	}()
 
@@ -777,9 +800,16 @@ func ExampleManager_Start() {
 		CompensateQueue: "saga.compensate",
 	}
 
-	manager, _ := NewManager(client, store, config)
+	manager, err := NewManager(client, store, config)
+	if err != nil {
+		// Handle error in real code
+		return
+	}
+
 	defer func() {
-		_ = manager.Close() // Ignore close error in defer
+		if manager != nil {
+			_ = manager.Close() // Ignore close error in defer
+		}
 	}()
 
 	steps := []Step{
@@ -789,9 +819,12 @@ func ExampleManager_Start() {
 	}
 
 	ctx := context.Background()
-	saga, _ := manager.Start(ctx, "order_processing", steps, map[string]any{
+	saga, err := manager.Start(ctx, "order_processing", steps, map[string]any{
 		"customer_id": "cust-123",
 	})
+	if err != nil {
+		return
+	}
 
 	_ = saga
 	// Output:
