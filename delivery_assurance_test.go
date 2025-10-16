@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -111,10 +112,17 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 	admin := client.Admin()
 	ctx := context.Background()
 
-	err = admin.DeclareExchange(ctx, "test-return-exchange", ExchangeTypeTopic)
+	// Use unique exchange name to avoid conflicts with previous test runs
+	exchangeName := fmt.Sprintf("test-return-exchange-%d", time.Now().UnixNano())
+
+	err = admin.DeclareExchange(ctx, exchangeName, ExchangeTypeTopic)
 	if err != nil {
 		t.Fatalf("Failed to declare exchange: %v", err)
 	}
+	defer func() {
+		// Clean up exchange after test
+		_ = admin.DeleteExchange(ctx, exchangeName)
+	}()
 
 	// Create publisher with delivery assurance
 	var mu sync.Mutex
@@ -142,7 +150,7 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 	message := NewMessage([]byte("test message"))
 	err = publisher.PublishWithDeliveryAssurance(
 		ctx,
-		"test-return-exchange",
+		exchangeName,
 		"nonexistent.routing.key",
 		message,
 		DeliveryOptions{
