@@ -122,6 +122,10 @@ type MetricsCollector interface {
 	RecordPublish(exchange, routingKey string, messageSize int, duration time.Duration)
 	RecordPublishConfirmation(success bool, duration time.Duration)
 
+	// Delivery assurance metrics
+	RecordDeliveryOutcome(outcome DeliveryOutcome, duration time.Duration)
+	RecordDeliveryTimeout(messageID string)
+
 	// Consumption metrics
 	RecordConsume(queue string, messageSize int, duration time.Duration)
 	RecordMessageReceived(queue string)
@@ -141,13 +145,16 @@ func (n *NopMetrics) RecordConnectionAttempt(success bool, duration time.Duratio
 func (n *NopMetrics) RecordReconnection(attempt int)                               {}
 func (n *NopMetrics) RecordPublish(exchange, routingKey string, messageSize int, duration time.Duration) {
 }
-func (n *NopMetrics) RecordPublishConfirmation(success bool, duration time.Duration)            {}
-func (n *NopMetrics) RecordConsume(queue string, messageSize int, duration time.Duration)       {}
-func (n *NopMetrics) RecordMessageReceived(queue string)                                        {}
-func (n *NopMetrics) RecordMessageProcessed(queue string, success bool, duration time.Duration) {}
-func (n *NopMetrics) RecordMessageRequeued(queue string)                                        {}
-func (n *NopMetrics) RecordHealthCheck(success bool, duration time.Duration)                    {}
-func (n *NopMetrics) RecordError(operation string, err error)                                   {}
+func (n *NopMetrics) RecordPublishConfirmation(success bool, duration time.Duration)        {}
+func (n *NopMetrics) RecordDeliveryOutcome(outcome DeliveryOutcome, duration time.Duration) {}
+func (n *NopMetrics) RecordDeliveryTimeout(messageID string)                                {}
+func (n *NopMetrics) RecordConsume(queue string, messageSize int, duration time.Duration)   {}
+func (n *NopMetrics) RecordMessageReceived(queue string)                                    {}
+func (n *NopMetrics) RecordMessageProcessed(queue string, success bool, duration time.Duration) {
+}
+func (n *NopMetrics) RecordMessageRequeued(queue string)                     {}
+func (n *NopMetrics) RecordHealthCheck(success bool, duration time.Duration) {}
+func (n *NopMetrics) RecordError(operation string, err error)                {}
 
 func NewNopMetrics() MetricsCollector {
 	return &NopMetrics{}

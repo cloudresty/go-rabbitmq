@@ -42,8 +42,8 @@ dependencies:
   go_version:
     check_frequency: "weekly"
     auto_update: true
-    current_version: "1.24.1"
-    toolchain_version: "1.24.4"
+    current_version: "1.25.3"
+    toolchain_version: "1.25.9"
     # Only update within same major version (1.x.x -> 1.y.z)
     major_version_updates: false
 

@@ -410,6 +410,142 @@ if err != nil {
 
 &nbsp;
 
+### Publishing with Delivery Assurance
+
+Delivery assurance provides reliable message delivery guarantees through asynchronous callbacks, eliminating the need to manually handle publisher confirms and returns.
+
+#### Basic Usage
+
+```go
+// Create publisher with delivery assurance
+publisher, err := client.NewPublisher(
+    rabbitmq.WithDeliveryAssurance(),
+    rabbitmq.WithDefaultDeliveryCallback(func(messageID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+        switch outcome {
+        case rabbitmq.DeliverySuccess:
+            log.Printf("✓ Message %s delivered successfully", messageID)
+        case rabbitmq.DeliveryFailed:
+            log.Printf("✗ Message %s failed: %s", messageID, errorMessage)
+        case rabbitmq.DeliveryNacked:
+            log.Printf("⚠ Message %s nacked: %s", messageID, errorMessage)
+        case rabbitmq.DeliveryTimeout:
+            log.Printf("⏱ Message %s timed out", messageID)
+        }
+    }),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer publisher.Close()
+
+// Publish with delivery assurance
+message := rabbitmq.NewMessage([]byte("Important event"))
+err = publisher.PublishWithDeliveryAssurance(
+    ctx,
+    "events",
+    "user.created",
+    message,
+    rabbitmq.DeliveryOptions{
+        MessageID: "event-123",
+        Mandatory: true,
+    },
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### Publisher Options for Delivery Assurance
+
+| Option | Description |
+|--------|-------------|
+| `WithDeliveryAssurance()` | Enables delivery assurance with asynchronous confirmation tracking |
+| `WithDefaultDeliveryCallback(callback)` | Sets the default callback for delivery outcomes |
+| `WithDeliveryTimeout(duration)` | Sets the timeout for delivery confirmations (default: 30s) |
+| `WithMandatoryByDefault(bool)` | Makes all messages mandatory by default |
+
+#### Delivery Options
+
+```go
+type DeliveryOptions struct {
+    MessageID   string           // Unique identifier for tracking
+    Mandatory   bool             // Return message if no queue bound
+    Callback    DeliveryCallback // Per-message callback (overrides default)
+    Timeout     time.Duration    // Per-message timeout (overrides default)
+    RetryOnNack bool             // Retry on broker nack
+    MaxRetries  int              // Maximum retry attempts
+}
+```
+
+#### Delivery Outcomes
+
+- **DeliverySuccess**: Message confirmed by broker and successfully routed
+- **DeliveryFailed**: Message returned by broker (no queue bound to routing key)
+- **DeliveryNacked**: Message negatively acknowledged by broker
+- **DeliveryTimeout**: No confirmation received within timeout period
+
+#### Advanced Usage with Per-Message Callbacks
+
+```go
+err = publisher.PublishWithDeliveryAssurance(
+    ctx,
+    "events",
+    "critical.event",
+    message,
+    rabbitmq.DeliveryOptions{
+        MessageID: "critical-123",
+        Mandatory: true,
+        Timeout:   10 * time.Second,
+        Callback: func(messageID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+            // Custom handling for this specific message
+            if outcome != rabbitmq.DeliverySuccess {
+                alerting.SendAlert("Critical message failed", messageID, errorMessage)
+                retryQueue.Add(messageID)
+            }
+        },
+    },
+)
+```
+
+#### Monitoring Delivery Statistics
+
+```go
+// Check if delivery assurance is enabled
+if publisher.IsDeliveryAssuranceEnabled() {
+    stats := publisher.GetDeliveryStats()
+    log.Printf("Delivery Statistics:")
+    log.Printf("  Total Published:  %d", stats.TotalPublished)
+    log.Printf("  Total Confirmed:  %d", stats.TotalConfirmed)
+    log.Printf("  Total Returned:   %d", stats.TotalReturned)
+    log.Printf("  Total Nacked:     %d", stats.TotalNacked)
+    log.Printf("  Total Timed Out:  %d", stats.TotalTimedOut)
+    log.Printf("  Pending Messages: %d", stats.PendingMessages)
+}
+```
+
+#### Key Benefits
+
+- **Asynchronous**: Non-blocking publish operations with callback-based notifications
+- **Reliable**: Tracks confirmations, returns, and nacks automatically
+- **Thread-Safe**: Fully concurrent publishing support
+- **Observable**: Built-in statistics and metrics
+- **Flexible**: Per-message or default callbacks
+
+#### Best Practices
+
+1. **Always set unique message IDs** for tracking and correlation
+2. **Use mandatory flag** for critical messages to detect routing failures
+3. **Monitor statistics** regularly to detect delivery issues
+4. **Handle all outcomes** in callbacks (success, failed, nacked, timeout)
+5. **Set appropriate timeouts** based on your SLA requirements
+6. **Close publishers gracefully** to ensure pending confirmations are handled
+
+See the [delivery-assurance example](../../examples/delivery-assurance) for complete working examples.
+
+🔝 [back to top](#main-package-api-reference)
+
+&nbsp;
+
 ### Consuming Messages
 
 ```go
