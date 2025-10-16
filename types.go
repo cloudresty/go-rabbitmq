@@ -626,3 +626,88 @@ func (m *Message) Clone() *Message {
 
 	return clone
 }
+
+// Delivery Assurance Types
+
+// DeliveryOutcome represents the possible outcomes of message delivery
+type DeliveryOutcome string
+
+const (
+	// DeliverySuccess indicates the message was confirmed by the broker and successfully routed
+	DeliverySuccess DeliveryOutcome = "success"
+
+	// DeliveryFailed indicates the message was returned by the broker (no queue bound to routing key)
+	DeliveryFailed DeliveryOutcome = "failed"
+
+	// DeliveryNacked indicates the message was negatively acknowledged by the broker
+	DeliveryNacked DeliveryOutcome = "nacked"
+
+	// DeliveryTimeout indicates the delivery confirmation timed out
+	DeliveryTimeout DeliveryOutcome = "timeout"
+)
+
+// DeliveryCallback defines the callback function signature for delivery assurance outcomes.
+// The callback is invoked asynchronously when a delivery outcome is determined.
+//
+// Parameters:
+//   - messageID: The unique identifier of the message (from Message.MessageID)
+//   - outcome: The delivery outcome (success, failed, nacked, or timeout)
+//   - errorMessage: Additional error details (empty for successful deliveries)
+type DeliveryCallback func(messageID string, outcome DeliveryOutcome, errorMessage string)
+
+// DeliveryOptions configures delivery assurance behavior for individual messages
+type DeliveryOptions struct {
+	// MessageID is the unique identifier for tracking this message.
+	// If empty, the Message.MessageID will be used.
+	MessageID string
+
+	// Mandatory indicates whether the message should be returned if it cannot be routed.
+	// When true, the broker will return the message if no queue is bound to the routing key.
+	Mandatory bool
+
+	// Callback is the delivery outcome callback for this specific message.
+	// If nil, the publisher's default callback will be used (if configured).
+	Callback DeliveryCallback
+
+	// Timeout specifies how long to wait for delivery confirmation.
+	// If zero, the publisher's default delivery timeout will be used.
+	Timeout time.Duration
+
+	// RetryOnNack indicates whether to automatically retry when the broker nacks the message.
+	// This is typically used for transient broker issues.
+	RetryOnNack bool
+
+	// MaxRetries specifies the maximum number of retry attempts when RetryOnNack is true.
+	// If zero, no retries will be attempted.
+	MaxRetries int
+}
+
+// DeliveryStats provides metrics and statistics about delivery assurance operations
+type DeliveryStats struct {
+	// TotalPublished is the total number of messages published with delivery assurance
+	TotalPublished int64
+
+	// TotalConfirmed is the total number of messages confirmed by the broker
+	TotalConfirmed int64
+
+	// TotalReturned is the total number of messages returned by the broker (routing failures)
+	TotalReturned int64
+
+	// TotalNacked is the total number of messages negatively acknowledged by the broker
+	TotalNacked int64
+
+	// TotalTimedOut is the total number of messages that timed out waiting for confirmation
+	TotalTimedOut int64
+
+	// PendingMessages is the current number of messages awaiting confirmation
+	PendingMessages int64
+
+	// LastConfirmation is the timestamp of the most recent confirmation received
+	LastConfirmation time.Time
+
+	// LastReturn is the timestamp of the most recent message return
+	LastReturn time.Time
+
+	// LastNack is the timestamp of the most recent nack
+	LastNack time.Time
+}

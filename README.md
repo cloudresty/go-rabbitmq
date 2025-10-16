@@ -88,6 +88,7 @@ Each sub-package implements core interfaces defined in the root package, enablin
 
 ### Production-Ready Features
 
+- **Delivery Assurance**: Built-in publisher confirms with asynchronous callbacks for reliable message delivery
 - **Topology Auto-Healing**: Automatic topology validation and recreation enabled by default
 - **Connection Pooling**: Distribute load across multiple connections with health monitoring
 - **Message Encryption**: AES-256-GCM encryption with secure key management
@@ -324,9 +325,39 @@ shutdownManager.SetupSignalHandler()
 
 See [examples/production-defaults/](examples/production-defaults/) for a comprehensive demonstration of the production-ready defaults including quorum queues, dead letter configuration, and customization options.
 
-### Topology Auto-Healing Demo  
+### Topology Auto-Healing Demo
 
 See [examples/topology-features/](examples/topology-features/) for a comprehensive demonstration of topology validation, auto-recreation, environment configuration, and opt-out options.
+
+### Delivery Assurance Demo
+
+See [examples/delivery-assurance/](examples/delivery-assurance/) for comprehensive examples of reliable message delivery with asynchronous callbacks, including simple usage, advanced callbacks, mandatory publishing, statistics monitoring, and concurrent publishing.
+
+```go
+// Create publisher with delivery assurance
+publisher, err := client.NewPublisher(
+    rabbitmq.WithDeliveryAssurance(),
+    rabbitmq.WithDefaultDeliveryCallback(func(messageID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+        switch outcome {
+        case rabbitmq.DeliverySuccess:
+            log.Printf("✓ Message %s delivered successfully", messageID)
+        case rabbitmq.DeliveryFailed:
+            log.Printf("✗ Message %s failed: %s", messageID, errorMessage)
+        case rabbitmq.DeliveryNacked:
+            log.Printf("⚠ Message %s nacked", messageID)
+        case rabbitmq.DeliveryTimeout:
+            log.Printf("⏱ Message %s timed out", messageID)
+        }
+    }),
+)
+
+// Publish with delivery tracking
+err = publisher.PublishWithDeliveryAssurance(ctx, "events", "user.created", message,
+    rabbitmq.DeliveryOptions{
+        MessageID: "event-123",
+        Mandatory: true,
+    })
+```
 
 ### Complete Feature Integration
 

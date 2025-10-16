@@ -301,6 +301,7 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 		ConfirmationEnabled: false,
 		ConfirmationTimeout: 5 * time.Second,
 		RetryPolicy:         NoRetry,
+		deliveryTimeout:     30 * time.Second, // Default delivery assurance timeout
 	}
 
 	// Apply options
@@ -331,12 +332,21 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 		ch:     ch,
 	}
 
+	// Initialize delivery assurance if enabled
+	if config.enableDeliveryAssurance {
+		if err := publisher.initDeliveryAssurance(); err != nil {
+			_ = ch.Close() // Clean up channel on error
+			return nil, fmt.Errorf("failed to initialize delivery assurance: %w", err)
+		}
+	}
+
 	c.config.Logger.Info("Publisher created successfully",
 		"connection_name", c.config.ConnectionName,
 		"default_exchange", config.DefaultExchange,
 		"mandatory", config.Mandatory,
 		"persistent", config.Persistent,
-		"confirmation_enabled", config.ConfirmationEnabled)
+		"confirmation_enabled", config.ConfirmationEnabled,
+		"delivery_assurance_enabled", config.enableDeliveryAssurance)
 
 	return publisher, nil
 }
