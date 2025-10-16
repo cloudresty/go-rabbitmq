@@ -1,6 +1,6 @@
 module github.com/cloudresty/go-rabbitmq
 
-go 1.24.5
+go 1.25.3
 
 require github.com/rabbitmq/amqp091-go v1.10.0
 
