@@ -990,3 +990,16 @@ func (p *Publisher) GetDeliveryStats() DeliveryStats {
 func (p *Publisher) SetDefaultDeliveryCallback(callback DeliveryCallback) {
 	p.config.defaultDeliveryCallback = callback
 }
+
+// IsDeliveryAssuranceEnabled returns true if delivery assurance is enabled for this publisher.
+// This can be useful for conditional logic, monitoring, or debugging purposes.
+//
+// Example:
+//
+//	if publisher.IsDeliveryAssuranceEnabled() {
+//	    stats := publisher.GetDeliveryStats()
+//	    log.Printf("Delivery stats: %+v", stats)
+//	}
+func (p *Publisher) IsDeliveryAssuranceEnabled() bool {
+	return p.deliveryAssuranceEnabled
+}

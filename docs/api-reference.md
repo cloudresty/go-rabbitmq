@@ -510,14 +510,17 @@ err = publisher.PublishWithDeliveryAssurance(
 #### Monitoring Delivery Statistics
 
 ```go
-stats := publisher.GetDeliveryStats()
-log.Printf("Delivery Statistics:")
-log.Printf("  Total Published:  %d", stats.TotalPublished)
-log.Printf("  Total Confirmed:  %d", stats.TotalConfirmed)
-log.Printf("  Total Returned:   %d", stats.TotalReturned)
-log.Printf("  Total Nacked:     %d", stats.TotalNacked)
-log.Printf("  Total Timed Out:  %d", stats.TotalTimedOut)
-log.Printf("  Pending Messages: %d", stats.PendingMessages)
+// Check if delivery assurance is enabled
+if publisher.IsDeliveryAssuranceEnabled() {
+    stats := publisher.GetDeliveryStats()
+    log.Printf("Delivery Statistics:")
+    log.Printf("  Total Published:  %d", stats.TotalPublished)
+    log.Printf("  Total Confirmed:  %d", stats.TotalConfirmed)
+    log.Printf("  Total Returned:   %d", stats.TotalReturned)
+    log.Printf("  Total Nacked:     %d", stats.TotalNacked)
+    log.Printf("  Total Timed Out:  %d", stats.TotalTimedOut)
+    log.Printf("  Pending Messages: %d", stats.PendingMessages)
+}
 ```
 
 #### Key Benefits
