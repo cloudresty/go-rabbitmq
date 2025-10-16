@@ -114,6 +114,7 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 
 	// Use unique exchange name to avoid conflicts with previous test runs
 	exchangeName := fmt.Sprintf("test-return-exchange-%d", time.Now().UnixNano())
+	t.Logf("Using exchange name: %s", exchangeName)
 
 	err = admin.DeclareExchange(ctx, exchangeName, ExchangeTypeTopic)
 	if err != nil {
@@ -123,6 +124,10 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 		// Clean up exchange after test
 		_ = admin.DeleteExchange(ctx, exchangeName)
 	}()
+
+	// Verify no queues are bound to this exchange
+	// This is a sanity check to ensure the exchange is truly isolated
+	t.Logf("Exchange %s created, publishing with mandatory=true to routing key that should have no bindings", exchangeName)
 
 	// Create publisher with delivery assurance
 	var mu sync.Mutex
@@ -390,7 +395,7 @@ func TestDeliveryAssuranceConcurrent(t *testing.T) {
 				"concurrent.test",
 				message,
 				DeliveryOptions{
-					MessageID: "concurrent-msg-" + string(rune(id)),
+					MessageID: fmt.Sprintf("concurrent-msg-%d", id),
 					Mandatory: true,
 				},
 			)

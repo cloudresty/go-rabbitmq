@@ -569,8 +569,12 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 func (p *Publisher) Close() error {
 	// Shutdown delivery assurance if enabled
 	if p.deliveryAssuranceEnabled {
+		p.pendingMutex.RLock()
+		pendingCount := len(p.pendingMessages)
+		p.pendingMutex.RUnlock()
+
 		p.client.config.Logger.Info("Shutting down delivery assurance",
-			"pending_messages", len(p.pendingMessages))
+			"pending_messages", pendingCount)
 
 		// Signal shutdown to background goroutines
 		close(p.shutdownChan)
@@ -596,12 +600,12 @@ func (p *Publisher) Close() error {
 				pending.TimeoutTimer.Stop()
 			}
 		}
-		pendingCount := len(p.pendingMessages)
+		finalPendingCount := len(p.pendingMessages)
 		p.pendingMutex.Unlock()
 
-		if pendingCount > 0 {
+		if finalPendingCount > 0 {
 			p.client.config.Logger.Warn("Publisher closed with pending messages",
-				"pending_count", pendingCount)
+				"pending_count", finalPendingCount)
 		}
 
 		// Close the dedicated confirmation channel
@@ -796,6 +800,30 @@ func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 		p.pendingMutex.Unlock()
 		return
 	}
+
+	// For mandatory messages with Ack, we need to wait briefly to see if a return arrives
+	// RabbitMQ sends both Return and Ack, but they can arrive in any order
+	if confirmation.Ack && pending.Mandatory {
+		// Keep the message in pending state temporarily
+		p.pendingMutex.Unlock()
+
+		// Wait for potential return notification (50ms should be more than enough for local delivery)
+		time.Sleep(50 * time.Millisecond)
+
+		// Re-check if message was returned during the wait
+		p.pendingMutex.Lock()
+		if p.returnedMessages[confirmation.DeliveryTag] {
+			// Message was returned, cleanup and skip confirmation processing
+			delete(p.returnedMessages, confirmation.DeliveryTag)
+			p.pendingMutex.Unlock()
+			return
+		}
+		// Message was not returned, proceed with success processing
+		p.pendingMutex.Unlock()
+	}
+
+	// Remove from pending messages
+	p.pendingMutex.Lock()
 	delete(p.pendingMessages, confirmation.DeliveryTag)
 	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
