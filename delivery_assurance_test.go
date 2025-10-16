@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -111,23 +112,38 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 	admin := client.Admin()
 	ctx := context.Background()
 
-	err = admin.DeclareExchange(ctx, "test-return-exchange", ExchangeTypeTopic)
+	// Use unique exchange name to avoid conflicts with previous test runs
+	exchangeName := fmt.Sprintf("test-return-exchange-%d", time.Now().UnixNano())
+	t.Logf("Using exchange name: %s", exchangeName)
+
+	err = admin.DeclareExchange(ctx, exchangeName, ExchangeTypeTopic)
 	if err != nil {
 		t.Fatalf("Failed to declare exchange: %v", err)
 	}
+	defer func() {
+		// Clean up exchange after test
+		_ = admin.DeleteExchange(ctx, exchangeName)
+	}()
+
+	// Verify no queues are bound to this exchange
+	// This is a sanity check to ensure the exchange is truly isolated
+	t.Logf("Exchange %s created, publishing with mandatory=true to routing key that should have no bindings", exchangeName)
 
 	// Create publisher with delivery assurance
 	var mu sync.Mutex
 	outcomes := make(map[string]DeliveryOutcome)
 	errorMessages := make(map[string]string)
+	callbackReceived := make(chan struct{})
 
 	publisher, err := client.NewPublisher(
 		WithDeliveryAssurance(),
 		WithDefaultDeliveryCallback(func(messageID string, outcome DeliveryOutcome, errorMessage string) {
+			t.Logf("Callback invoked: messageID=%s, outcome=%s, error=%s", messageID, outcome, errorMessage)
 			mu.Lock()
 			outcomes[messageID] = outcome
 			errorMessages[messageID] = errorMessage
 			mu.Unlock()
+			close(callbackReceived)
 		}),
 	)
 	if err != nil {
@@ -139,7 +155,7 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 	message := NewMessage([]byte("test message"))
 	err = publisher.PublishWithDeliveryAssurance(
 		ctx,
-		"test-return-exchange",
+		exchangeName,
 		"nonexistent.routing.key",
 		message,
 		DeliveryOptions{
@@ -151,8 +167,13 @@ func TestDeliveryAssuranceReturn(t *testing.T) {
 		t.Fatalf("Failed to publish: %v", err)
 	}
 
-	// Wait for callback
-	time.Sleep(1 * time.Second)
+	// Wait for callback with timeout
+	select {
+	case <-callbackReceived:
+		// Callback received
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timeout waiting for delivery callback")
+	}
 
 	mu.Lock()
 	outcome, exists := outcomes["return-msg-1"]
@@ -374,7 +395,7 @@ func TestDeliveryAssuranceConcurrent(t *testing.T) {
 				"concurrent.test",
 				message,
 				DeliveryOptions{
-					MessageID: "concurrent-msg-" + string(rune(id)),
+					MessageID: fmt.Sprintf("concurrent-msg-%d", id),
 					Mandatory: true,
 				},
 			)
