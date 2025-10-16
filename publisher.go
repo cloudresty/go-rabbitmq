@@ -19,6 +19,7 @@ type Publisher struct {
 	deliveryAssuranceEnabled bool
 	confirmChannel           *amqp.Channel // Dedicated channel for delivery assurance
 	pendingMessages          map[uint64]*pendingMessage
+	returnedMessages         map[uint64]bool // Track messages that have been returned
 	pendingMutex             sync.RWMutex
 	confirmChan              chan amqp.Confirmation
 	returnChan               chan amqp.Return
@@ -719,6 +720,7 @@ func (p *Publisher) initDeliveryAssurance() error {
 	p.deliveryAssuranceEnabled = true
 	p.confirmChannel = confirmCh
 	p.pendingMessages = make(map[uint64]*pendingMessage)
+	p.returnedMessages = make(map[uint64]bool)
 	p.confirmChan = make(chan amqp.Confirmation, 100)
 	p.returnChan = make(chan amqp.Return, 100)
 	p.shutdownChan = make(chan struct{})
@@ -780,6 +782,15 @@ func (p *Publisher) processReturns() {
 // handleConfirmation processes a single confirmation
 func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 	p.pendingMutex.Lock()
+
+	// Check if this message was already returned
+	if p.returnedMessages[confirmation.DeliveryTag] {
+		// Message was returned, cleanup the returned flag and skip confirmation processing
+		delete(p.returnedMessages, confirmation.DeliveryTag)
+		p.pendingMutex.Unlock()
+		return
+	}
+
 	pending, exists := p.pendingMessages[confirmation.DeliveryTag]
 	if !exists {
 		p.pendingMutex.Unlock()
@@ -851,6 +862,8 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		p.pendingMutex.Unlock()
 		return
 	}
+	// Mark as returned so handleConfirmation knows not to process it
+	p.returnedMessages[deliveryTag] = true
 	delete(p.pendingMessages, deliveryTag)
 	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
