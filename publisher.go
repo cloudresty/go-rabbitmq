@@ -470,6 +470,9 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	// Convert to AMQP publishing
 	publishing := message.ToAMQPPublishing()
 
+	// Ensure MessageId is set for correlation with returns
+	publishing.MessageId = messageID
+
 	// Get next delivery tag for tracking
 	deliveryTag := p.getNextDeliveryTag()
 
@@ -495,12 +498,13 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	// Add to pending messages before publishing
 	p.pendingMutex.Lock()
 	p.pendingMessages[deliveryTag] = pending
+	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
 
 	// Update statistics
 	p.statsMutex.Lock()
 	p.stats.TotalPublished++
-	p.stats.PendingMessages = int64(len(p.pendingMessages))
+	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
 	// Start tracing span
@@ -527,6 +531,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		// Remove from pending messages on publish error
 		p.pendingMutex.Lock()
 		delete(p.pendingMessages, deliveryTag)
+		pendingCount := int64(len(p.pendingMessages))
 		p.pendingMutex.Unlock()
 
 		// Stop timeout timer
@@ -534,7 +539,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 
 		// Update statistics
 		p.statsMutex.Lock()
-		p.stats.PendingMessages = int64(len(p.pendingMessages))
+		p.stats.PendingMessages = pendingCount
 		p.statsMutex.Unlock()
 
 		p.client.config.Metrics.RecordError("publish_with_delivery_assurance", err)
@@ -781,6 +786,7 @@ func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 		return
 	}
 	delete(p.pendingMessages, confirmation.DeliveryTag)
+	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
 
 	// Stop the timeout timer
@@ -800,7 +806,7 @@ func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 		p.stats.TotalNacked++
 		p.stats.LastNack = time.Now()
 	}
-	p.stats.PendingMessages = int64(len(p.pendingMessages))
+	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
 	// Record metrics
@@ -846,6 +852,7 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		return
 	}
 	delete(p.pendingMessages, deliveryTag)
+	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
 
 	// Stop the timeout timer
@@ -860,7 +867,7 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	p.statsMutex.Lock()
 	p.stats.TotalReturned++
 	p.stats.LastReturn = time.Now()
-	p.stats.PendingMessages = int64(len(p.pendingMessages))
+	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
 	// Record metrics
@@ -899,6 +906,7 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 		return
 	}
 	delete(p.pendingMessages, deliveryTag)
+	pendingCount := int64(len(p.pendingMessages))
 	p.pendingMutex.Unlock()
 
 	// Calculate duration
@@ -907,7 +915,7 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	// Update statistics
 	p.statsMutex.Lock()
 	p.stats.TotalTimedOut++
-	p.stats.PendingMessages = int64(len(p.pendingMessages))
+	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
 	// Record metrics
