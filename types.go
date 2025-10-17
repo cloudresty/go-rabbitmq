@@ -675,6 +675,10 @@ type DeliveryOptions struct {
 
 	// RetryOnNack indicates whether to automatically retry when the broker nacks the message.
 	// This is typically used for transient broker issues.
+	//
+	// Note: Current implementation does not store the message body, so retries are not
+	// fully functional. The callback will be invoked with a nack outcome. This will be
+	// improved in a future version to support actual re-publishing.
 	RetryOnNack bool
 
 	// MaxRetries specifies the maximum number of retry attempts when RetryOnNack is true.

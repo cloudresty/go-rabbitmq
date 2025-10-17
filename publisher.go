@@ -55,6 +55,7 @@ type publisherConfig struct {
 	defaultDeliveryCallback DeliveryCallback
 	deliveryTimeout         time.Duration
 	defaultMandatory        bool
+	mandatoryGracePeriod    time.Duration // Grace period to wait for Return after Confirmation on mandatory messages
 }
 
 // pendingMessage tracks a message awaiting delivery confirmation
@@ -252,6 +253,31 @@ func WithDeliveryTimeout(timeout time.Duration) PublisherOption {
 func WithMandatoryByDefault(mandatory bool) PublisherOption {
 	return func(config *publisherConfig) {
 		config.defaultMandatory = mandatory
+	}
+}
+
+// WithMandatoryGracePeriod sets the grace period to wait for Return notifications
+// after receiving a Confirmation for mandatory messages.
+//
+// When a mandatory message is published, RabbitMQ sends both a Confirmation (ack/nack)
+// and potentially a Return notification (if the message couldn't be routed). These can
+// arrive in any order. The grace period ensures we wait long enough to receive both
+// before finalizing the message as successful.
+//
+// Default: 200ms (suitable for most deployments)
+// Increase this in high-latency environments or if you observe false positives
+// (messages marked as success when they should have failed with NO_ROUTE).
+//
+// Example:
+//
+//	publisher, err := client.NewPublisher(
+//	    rabbitmq.WithDeliveryAssurance(),
+//	    rabbitmq.WithMandatoryByDefault(true),
+//	    rabbitmq.WithMandatoryGracePeriod(500 * time.Millisecond), // For high-latency networks
+//	)
+func WithMandatoryGracePeriod(duration time.Duration) PublisherOption {
+	return func(config *publisherConfig) {
+		config.mandatoryGracePeriod = duration
 	}
 }
 
@@ -934,11 +960,11 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 			"message_id", pending.MessageID,
 			"delivery_tag", pending.DeliveryTag)
 
-		// Reset the timeout timer to a shorter duration (200ms grace period)
+		// Reset the timeout timer to the configured grace period
 		if pending.TimeoutTimer != nil {
 			pending.TimeoutTimer.Stop()
 		}
-		pending.TimeoutTimer = time.AfterFunc(200*time.Millisecond, func() {
+		pending.TimeoutTimer = time.AfterFunc(p.config.mandatoryGracePeriod, func() {
 			p.handleMandatoryGracePeriodExpired(pending.DeliveryTag)
 		})
 		// Don't finalize yet - wait for return or grace period expiration
@@ -996,56 +1022,127 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 	// Record metrics
 	p.client.config.Metrics.RecordDeliveryOutcome(outcome, duration)
 
-	// Invoke callback (outside of message lock to avoid deadlocks)
+	// Copy all necessary data for the callback while still holding the per-message lock
 	callback := pending.Callback
 	messageID := pending.MessageID
+	deliveryTag := pending.DeliveryTag
+	shouldRetry := (outcome == DeliveryNacked && pending.RetryOnNack && pending.RetryCount < pending.MaxRetries)
 
-	// Release message lock before invoking callback
-	pending.mu.Unlock()
-
-	if callback != nil {
-		if outcome == DeliveryNacked && pending.RetryOnNack && pending.RetryCount < pending.MaxRetries {
-			// Re-acquire lock for retry
-			pending.mu.Lock()
-			p.retryMessage(pending)
-			return // Don't re-lock at the end
-		} else {
-			callback(messageID, outcome, errorMessage)
+	// Schedule the callback and cleanup to run in a separate goroutine
+	// This allows us to release the lock immediately and prevents blocking the handler loop
+	go func() {
+		// Invoke the callback (if provided)
+		if callback != nil {
+			if shouldRetry {
+				// For retry, we need to re-acquire the lock and call retryMessage
+				pending.mu.Lock()
+				p.retryMessage(pending)
+				pending.mu.Unlock()
+			} else {
+				// Normal callback - no locks needed
+				callback(messageID, outcome, errorMessage)
+			}
 		}
-	}
 
-	// Remove from pending messages after callback is done
-	p.pendingMutex.Lock()
-	delete(p.pendingByMessageID, pending.MessageID)
-	delete(p.pendingByDeliveryTag, pending.DeliveryTag)
-	pendingCount := int64(len(p.pendingByMessageID))
-	p.pendingMutex.Unlock()
+		// Remove from pending messages after callback is done
+		p.pendingMutex.Lock()
+		delete(p.pendingByMessageID, messageID)
+		delete(p.pendingByDeliveryTag, deliveryTag)
+		pendingCount := int64(len(p.pendingByMessageID))
+		p.pendingMutex.Unlock()
 
-	// Update pending count in stats
-	p.statsMutex.Lock()
-	p.stats.PendingMessages = pendingCount
-	p.statsMutex.Unlock()
+		// Update pending count in stats
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = pendingCount
+		p.statsMutex.Unlock()
+	}()
 
-	// Re-acquire message lock since defer will unlock
-	pending.mu.Lock()
+	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
 }
 
-// retryMessage attempts to retry a nacked message
-// Must be called with pendingMutex held
+// retryMessage attempts to retry a nacked message by re-publishing it
+// Must be called with pending.mu held
 func (p *Publisher) retryMessage(pending *pendingMessage) {
 	pending.RetryCount++
 
-	p.client.config.Logger.Debug("Retrying nacked message",
+	p.client.config.Logger.Info("Retrying nacked message",
 		"message_id", pending.MessageID,
 		"retry_count", pending.RetryCount,
 		"max_retries", pending.MaxRetries)
 
-	// Note: In a production implementation, you would re-publish the message here
-	// For now, we'll just invoke the callback with nacked outcome after max retries
+	// If we've exhausted retries, invoke the callback with final nack
 	if pending.RetryCount >= pending.MaxRetries {
-		pending.Callback(pending.MessageID, DeliveryNacked,
-			fmt.Sprintf("message nacked after %d retries", pending.RetryCount))
+		p.client.config.Logger.Warn("Message nacked after max retries",
+			"message_id", pending.MessageID,
+			"retry_count", pending.RetryCount)
+
+		// Copy data needed for callback
+		callback := pending.Callback
+		messageID := pending.MessageID
+		deliveryTag := pending.DeliveryTag
+		retryCount := pending.RetryCount
+
+		// Release the per-message lock before cleanup
+		pending.mu.Unlock()
+
+		// Invoke callback in goroutine
+		go func() {
+			if callback != nil {
+				callback(messageID, DeliveryNacked,
+					fmt.Sprintf("message nacked after %d retries", retryCount))
+			}
+
+			// Remove from pending messages
+			p.pendingMutex.Lock()
+			delete(p.pendingByMessageID, messageID)
+			delete(p.pendingByDeliveryTag, deliveryTag)
+			pendingCount := int64(len(p.pendingByMessageID))
+			p.pendingMutex.Unlock()
+
+			// Update stats
+			p.statsMutex.Lock()
+			p.stats.PendingMessages = pendingCount
+			p.statsMutex.Unlock()
+		}()
+
+		return
 	}
+
+	// Otherwise, re-publish the message
+	// Note: We need to reconstruct the message from the pending data
+	// For now, we log a warning that actual retry is not yet implemented
+	// because we don't store the original message body
+	p.client.config.Logger.Warn("Retry requested but message body not stored - invoking callback with nack",
+		"message_id", pending.MessageID,
+		"retry_count", pending.RetryCount)
+
+	// Copy data needed for callback
+	callback := pending.Callback
+	messageID := pending.MessageID
+	deliveryTag := pending.DeliveryTag
+
+	// Release the per-message lock before cleanup
+	pending.mu.Unlock()
+
+	// Invoke callback in goroutine
+	go func() {
+		if callback != nil {
+			callback(messageID, DeliveryNacked,
+				"message nacked (retry not fully implemented - message body not stored)")
+		}
+
+		// Remove from pending messages
+		p.pendingMutex.Lock()
+		delete(p.pendingByMessageID, messageID)
+		delete(p.pendingByDeliveryTag, deliveryTag)
+		pendingCount := int64(len(p.pendingByMessageID))
+		p.pendingMutex.Unlock()
+
+		// Update stats
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = pendingCount
+		p.statsMutex.Unlock()
+	}()
 }
 
 // handleMandatoryGracePeriodExpired is called when the grace period for a mandatory message expires
@@ -1105,31 +1202,31 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 	// Record metrics
 	p.client.config.Metrics.RecordDeliveryOutcome(DeliverySuccess, duration)
 
-	// Invoke callback (outside of message lock to avoid deadlocks)
+	// Copy all necessary data for the callback while still holding the per-message lock
 	callback := pending.Callback
 	messageID := pending.MessageID
 
-	// Release message lock before invoking callback
-	pending.mu.Unlock()
+	// Schedule the callback and cleanup to run in a separate goroutine
+	go func() {
+		// Invoke the callback (if provided)
+		if callback != nil {
+			callback(messageID, DeliverySuccess, "")
+		}
 
-	if callback != nil {
-		callback(messageID, DeliverySuccess, "")
-	}
+		// Remove from pending messages after callback is done
+		p.pendingMutex.Lock()
+		delete(p.pendingByMessageID, messageID)
+		delete(p.pendingByDeliveryTag, deliveryTag)
+		pendingCount := int64(len(p.pendingByMessageID))
+		p.pendingMutex.Unlock()
 
-	// Remove from pending messages after callback is done
-	p.pendingMutex.Lock()
-	delete(p.pendingByMessageID, pending.MessageID)
-	delete(p.pendingByDeliveryTag, deliveryTag)
-	pendingCount := int64(len(p.pendingByMessageID))
-	p.pendingMutex.Unlock()
+		// Update pending count in stats
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = pendingCount
+		p.statsMutex.Unlock()
+	}()
 
-	// Update pending count in stats
-	p.statsMutex.Lock()
-	p.stats.PendingMessages = pendingCount
-	p.statsMutex.Unlock()
-
-	// Re-acquire message lock since defer will unlock
-	pending.mu.Lock()
+	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
 }
 
 // handleTimeout is called when a message delivery times out
@@ -1169,36 +1266,37 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	p.client.config.Metrics.RecordDeliveryOutcome(DeliveryTimeout, duration)
 	p.client.config.Metrics.RecordDeliveryTimeout(pending.MessageID)
 
-	// Invoke callback (outside of message lock to avoid deadlocks)
+	// Copy all necessary data for the callback while still holding the per-message lock
 	callback := pending.Callback
 	messageID := pending.MessageID
 	errorMessage := pending.FinalError
+	timeout := p.config.deliveryTimeout
 
-	// Release message lock before invoking callback
-	pending.mu.Unlock()
+	// Schedule the callback and cleanup to run in a separate goroutine
+	go func() {
+		// Invoke the callback (if provided)
+		if callback != nil {
+			callback(messageID, DeliveryTimeout, errorMessage)
+		}
 
-	if callback != nil {
-		callback(messageID, DeliveryTimeout, errorMessage)
-	}
+		p.client.config.Logger.Warn("Message delivery timed out",
+			"message_id", messageID,
+			"timeout", timeout)
 
-	p.client.config.Logger.Warn("Message delivery timed out",
-		"message_id", messageID,
-		"timeout", p.config.deliveryTimeout)
+		// Remove from pending messages after callback is done
+		p.pendingMutex.Lock()
+		delete(p.pendingByMessageID, messageID)
+		delete(p.pendingByDeliveryTag, deliveryTag)
+		pendingCount := int64(len(p.pendingByMessageID))
+		p.pendingMutex.Unlock()
 
-	// Remove from pending messages after callback is done
-	p.pendingMutex.Lock()
-	delete(p.pendingByMessageID, pending.MessageID)
-	delete(p.pendingByDeliveryTag, deliveryTag)
-	pendingCount := int64(len(p.pendingByMessageID))
-	p.pendingMutex.Unlock()
+		// Update pending count in stats
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = pendingCount
+		p.statsMutex.Unlock()
+	}()
 
-	// Update pending count in stats
-	p.statsMutex.Lock()
-	p.stats.PendingMessages = pendingCount
-	p.statsMutex.Unlock()
-
-	// Re-acquire message lock since defer will unlock
-	pending.mu.Lock()
+	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
 }
 
 // getNextDeliveryTag returns the next delivery tag for tracking
