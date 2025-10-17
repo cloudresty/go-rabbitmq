@@ -56,6 +56,11 @@ type publisherConfig struct {
 	deliveryTimeout         time.Duration
 	defaultMandatory        bool
 	mandatoryGracePeriod    time.Duration // Grace period to wait for Return after Confirmation on mandatory messages
+
+	// Automatic retry configuration (opt-in feature)
+	enableAutomaticRetries bool          // Enable true automatic re-publishing of nacked messages
+	maxRetryAttempts       int           // Maximum number of retry attempts
+	retryDelay             time.Duration // Delay between retry attempts
 }
 
 // pendingMessage tracks a message awaiting delivery confirmation
@@ -68,9 +73,11 @@ type pendingMessage struct {
 	Exchange     string
 	RoutingKey   string
 	Mandatory    bool
-	RetryOnNack  bool
-	MaxRetries   int
-	RetryCount   int
+
+	// Automatic retry support (only populated if automatic retries are enabled)
+	OriginalMessage *Message        // Cloned message for retry (nil if retries disabled)
+	RetryCount      int             // Current retry attempt number
+	RetryOptions    DeliveryOptions // Original delivery options for retry
 
 	// State tracking for delivery assurance
 	// These fields are protected by the per-message mutex
@@ -278,6 +285,37 @@ func WithMandatoryByDefault(mandatory bool) PublisherOption {
 func WithMandatoryGracePeriod(duration time.Duration) PublisherOption {
 	return func(config *publisherConfig) {
 		config.mandatoryGracePeriod = duration
+	}
+}
+
+// WithAutomaticRetries enables true, automatic re-publishing of nacked messages.
+//
+// When a message is nacked by the broker (typically due to transient issues like
+// resource constraints), this feature will automatically re-publish the message
+// up to maxAttempts times with the specified delay between attempts.
+//
+// ⚠️ IMPORTANT: This feature stores the full message in memory until it is confirmed,
+// which will increase the publisher's memory footprint. Use it for critical messages
+// where at-least-once delivery is paramount.
+//
+// Parameters:
+//   - maxAttempts: Maximum number of retry attempts (e.g., 3 means original + 3 retries = 4 total attempts)
+//   - delay: Time to wait between retry attempts (e.g., 1*time.Second for exponential backoff use a custom callback)
+//
+// Example:
+//
+//	publisher, err := client.NewPublisher(
+//	    rabbitmq.WithDeliveryAssurance(),
+//	    rabbitmq.WithAutomaticRetries(3, 1*time.Second), // Retry up to 3 times with 1s delay
+//	)
+//
+// Note: If you need more control over retry logic (e.g., exponential backoff, custom
+// retry conditions), implement your own retry logic in the delivery callback instead.
+func WithAutomaticRetries(maxAttempts int, delay time.Duration) PublisherOption {
+	return func(config *publisherConfig) {
+		config.enableAutomaticRetries = true
+		config.maxRetryAttempts = maxAttempts
+		config.retryDelay = delay
 	}
 }
 
@@ -523,9 +561,13 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		Exchange:    exchange,
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
-		RetryOnNack: options.RetryOnNack,
-		MaxRetries:  options.MaxRetries,
 		RetryCount:  0,
+	}
+
+	// If automatic retries are enabled, clone the message for potential retry
+	if p.config.enableAutomaticRetries {
+		pending.OriginalMessage = message.Clone()
+		pending.RetryOptions = options
 	}
 
 	// Set up timeout timer
@@ -1026,22 +1068,28 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 	callback := pending.Callback
 	messageID := pending.MessageID
 	deliveryTag := pending.DeliveryTag
-	shouldRetry := (outcome == DeliveryNacked && pending.RetryOnNack && pending.RetryCount < pending.MaxRetries)
+
+	// Check if we should attempt automatic retry
+	shouldRetry := (outcome == DeliveryNacked &&
+		p.config.enableAutomaticRetries &&
+		pending.OriginalMessage != nil &&
+		pending.RetryCount < p.config.maxRetryAttempts)
+
+	// If we should retry, handle it differently
+	if shouldRetry {
+		// Don't invoke callback yet - we'll retry the message
+		// The retryMessage function will handle cleanup and callback
+		go p.retryMessage(pending)
+		// The deferred pending.mu.Unlock() will execute when the function returns
+		return
+	}
 
 	// Schedule the callback and cleanup to run in a separate goroutine
 	// This allows us to release the lock immediately and prevents blocking the handler loop
 	go func() {
 		// Invoke the callback (if provided)
 		if callback != nil {
-			if shouldRetry {
-				// For retry, we need to re-acquire the lock and call retryMessage
-				pending.mu.Lock()
-				p.retryMessage(pending)
-				pending.mu.Unlock()
-			} else {
-				// Normal callback - no locks needed
-				callback(messageID, outcome, errorMessage)
-			}
+			callback(messageID, outcome, errorMessage)
 		}
 
 		// Remove from pending messages after callback is done
@@ -1061,74 +1109,39 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 }
 
 // retryMessage attempts to retry a nacked message by re-publishing it
-// Must be called with pending.mu held
+// This function is called in a goroutine and does NOT hold any locks
 func (p *Publisher) retryMessage(pending *pendingMessage) {
+	// Acquire the per-message lock to safely read state
+	pending.mu.Lock()
+
+	// Increment retry count
 	pending.RetryCount++
+	retryCount := pending.RetryCount
+	maxRetries := p.config.maxRetryAttempts
 
-	p.client.config.Logger.Info("Retrying nacked message",
+	p.client.config.Logger.Info("Automatic retry triggered for nacked message",
 		"message_id", pending.MessageID,
-		"retry_count", pending.RetryCount,
-		"max_retries", pending.MaxRetries)
+		"retry_attempt", retryCount,
+		"max_attempts", maxRetries)
 
-	// If we've exhausted retries, invoke the callback with final nack
-	if pending.RetryCount >= pending.MaxRetries {
-		p.client.config.Logger.Warn("Message nacked after max retries",
+	// Check if we've exhausted retries
+	if retryCount > maxRetries {
+		p.client.config.Logger.Warn("Message nacked after max retry attempts",
 			"message_id", pending.MessageID,
-			"retry_count", pending.RetryCount)
+			"total_attempts", retryCount)
 
-		// Copy data needed for callback
+		// Copy data needed for final callback
 		callback := pending.Callback
 		messageID := pending.MessageID
 		deliveryTag := pending.DeliveryTag
-		retryCount := pending.RetryCount
 
-		// Release the per-message lock before cleanup
+		// Release the per-message lock
 		pending.mu.Unlock()
 
-		// Invoke callback in goroutine
-		go func() {
-			if callback != nil {
-				callback(messageID, DeliveryNacked,
-					fmt.Sprintf("message nacked after %d retries", retryCount))
-			}
-
-			// Remove from pending messages
-			p.pendingMutex.Lock()
-			delete(p.pendingByMessageID, messageID)
-			delete(p.pendingByDeliveryTag, deliveryTag)
-			pendingCount := int64(len(p.pendingByMessageID))
-			p.pendingMutex.Unlock()
-
-			// Update stats
-			p.statsMutex.Lock()
-			p.stats.PendingMessages = pendingCount
-			p.statsMutex.Unlock()
-		}()
-
-		return
-	}
-
-	// Otherwise, re-publish the message
-	// Note: We need to reconstruct the message from the pending data
-	// For now, we log a warning that actual retry is not yet implemented
-	// because we don't store the original message body
-	p.client.config.Logger.Warn("Retry requested but message body not stored - invoking callback with nack",
-		"message_id", pending.MessageID,
-		"retry_count", pending.RetryCount)
-
-	// Copy data needed for callback
-	callback := pending.Callback
-	messageID := pending.MessageID
-	deliveryTag := pending.DeliveryTag
-
-	// Release the per-message lock before cleanup
-	pending.mu.Unlock()
-
-	// Invoke callback in goroutine
-	go func() {
+		// Invoke final callback and cleanup
 		if callback != nil {
 			callback(messageID, DeliveryNacked,
-				"message nacked (retry not fully implemented - message body not stored)")
+				fmt.Sprintf("message nacked after %d retry attempts", retryCount))
 		}
 
 		// Remove from pending messages
@@ -1142,7 +1155,56 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 		p.statsMutex.Lock()
 		p.stats.PendingMessages = pendingCount
 		p.statsMutex.Unlock()
-	}()
+
+		return
+	}
+
+	// We have retries left - prepare to re-publish
+	// Copy all data needed for re-publishing while holding the lock
+	originalMessage := pending.OriginalMessage
+	exchange := pending.Exchange
+	routingKey := pending.RoutingKey
+	options := pending.RetryOptions
+	messageID := pending.MessageID
+	oldDeliveryTag := pending.DeliveryTag
+
+	// Release the per-message lock before sleeping and re-publishing
+	pending.mu.Unlock()
+
+	// Wait for the configured retry delay
+	p.client.config.Logger.Debug("Waiting before retry attempt",
+		"message_id", messageID,
+		"delay", p.config.retryDelay)
+	time.Sleep(p.config.retryDelay)
+
+	// Clean up the old pending entry before re-publishing
+	// The re-publish will create a new entry with a new delivery tag
+	p.pendingMutex.Lock()
+	delete(p.pendingByMessageID, messageID)
+	delete(p.pendingByDeliveryTag, oldDeliveryTag)
+	p.pendingMutex.Unlock()
+
+	// Re-publish the message
+	// This creates a new pending entry with a new delivery tag
+	ctx := context.Background()
+	err := p.PublishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options)
+
+	if err != nil {
+		p.client.config.Logger.Error("Failed to re-publish message for retry",
+			"message_id", messageID,
+			"error", err,
+			"retry_attempt", retryCount)
+
+		// Invoke callback with error
+		if options.Callback != nil {
+			options.Callback(messageID, DeliveryFailed,
+				fmt.Sprintf("retry failed: %v", err))
+		}
+	} else {
+		p.client.config.Logger.Info("Message re-published for retry",
+			"message_id", messageID,
+			"retry_attempt", retryCount)
+	}
 }
 
 // handleMandatoryGracePeriodExpired is called when the grace period for a mandatory message expires
