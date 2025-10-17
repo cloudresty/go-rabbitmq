@@ -672,18 +672,6 @@ type DeliveryOptions struct {
 	// Timeout specifies how long to wait for delivery confirmation.
 	// If zero, the publisher's default delivery timeout will be used.
 	Timeout time.Duration
-
-	// RetryOnNack indicates whether to automatically retry when the broker nacks the message.
-	// This is typically used for transient broker issues.
-	//
-	// Note: Current implementation does not store the message body, so retries are not
-	// fully functional. The callback will be invoked with a nack outcome. This will be
-	// improved in a future version to support actual re-publishing.
-	RetryOnNack bool
-
-	// MaxRetries specifies the maximum number of retry attempts when RetryOnNack is true.
-	// If zero, no retries will be attempted.
-	MaxRetries int
 }
 
 // DeliveryStats provides metrics and statistics about delivery assurance operations
