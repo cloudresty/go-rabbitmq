@@ -807,6 +807,14 @@ func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 	pending.mu.Lock()
 	defer pending.mu.Unlock()
 
+	// Log after acquiring lock to avoid race conditions
+	p.client.config.Logger.Debug("Confirmation received",
+		"message_id", pending.MessageID,
+		"delivery_tag", confirmation.DeliveryTag,
+		"ack", confirmation.Ack,
+		"mandatory", pending.Mandatory,
+		"returned", pending.Returned)
+
 	// Mark as confirmed or nacked
 	if confirmation.Ack {
 		pending.Confirmed = true
@@ -824,6 +832,13 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	// Note: Returns don't have delivery tags, so we need to match by message ID
 	messageID := ret.MessageId
 
+	p.client.config.Logger.Debug("Return notification received",
+		"message_id", messageID,
+		"reply_code", ret.ReplyCode,
+		"reply_text", ret.ReplyText,
+		"exchange", ret.Exchange,
+		"routing_key", ret.RoutingKey)
+
 	// Find the message (with global lock)
 	p.pendingMutex.RLock()
 	var pending *pendingMessage
@@ -833,15 +848,17 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 			break
 		}
 	}
+	pendingCount := len(p.pendingMessages)
 	p.pendingMutex.RUnlock()
 
 	if pending == nil {
 		// Message not found - may have already been finalized or timed out
 		// This is OK - just log and return
-		p.client.config.Logger.Debug("Return received for unknown message",
+		p.client.config.Logger.Warn("Return received for unknown message",
 			"message_id", messageID,
 			"reply_code", ret.ReplyCode,
-			"reply_text", ret.ReplyText)
+			"reply_text", ret.ReplyText,
+			"pending_count", pendingCount)
 		return
 	}
 
@@ -849,9 +866,30 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	pending.mu.Lock()
 	defer pending.mu.Unlock()
 
+	// Log after acquiring lock to avoid race conditions
+	p.client.config.Logger.Debug("Return matched to pending message",
+		"message_id", messageID,
+		"delivery_tag", pending.DeliveryTag,
+		"confirmed", pending.Confirmed,
+		"callback_fired", pending.CallbackFired)
+
+	// Check if callback already fired
+	if pending.CallbackFired {
+		p.client.config.Logger.Warn("Return received but callback already fired",
+			"message_id", messageID,
+			"delivery_tag", pending.DeliveryTag,
+			"final_outcome", pending.FinalOutcome)
+		return
+	}
+
 	// Mark as returned and store the reason
 	pending.Returned = true
 	pending.ReturnReason = fmt.Sprintf("message returned: %s (reply code: %d)", ret.ReplyText, ret.ReplyCode)
+
+	p.client.config.Logger.Debug("Marked message as returned, trying to finalize",
+		"message_id", messageID,
+		"delivery_tag", pending.DeliveryTag,
+		"confirmed", pending.Confirmed)
 
 	// Try to finalize based on current state
 	p.tryFinalizeMessage(pending)
@@ -889,6 +927,10 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 	} else if pending.Confirmed && pending.Mandatory {
 		// Mandatory message confirmed but not returned YET
 		// We need to wait a grace period for potential return
+		p.client.config.Logger.Debug("Mandatory message confirmed, starting grace period",
+			"message_id", pending.MessageID,
+			"delivery_tag", pending.DeliveryTag)
+
 		// Reset the timeout timer to a shorter duration (200ms grace period)
 		if pending.TimeoutTimer != nil {
 			pending.TimeoutTimer.Stop()
@@ -902,8 +944,21 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 
 	if !canFinalize {
 		// Not enough information yet - wait for more events
+		p.client.config.Logger.Debug("Not enough information to finalize",
+			"message_id", pending.MessageID,
+			"delivery_tag", pending.DeliveryTag,
+			"confirmed", pending.Confirmed,
+			"returned", pending.Returned,
+			"nacked", pending.Nacked,
+			"mandatory", pending.Mandatory)
 		return
 	}
+
+	p.client.config.Logger.Debug("Finalizing message",
+		"message_id", pending.MessageID,
+		"delivery_tag", pending.DeliveryTag,
+		"outcome", outcome,
+		"error", errorMessage)
 
 	// Mark callback as fired
 	pending.CallbackFired = true
@@ -1001,14 +1056,33 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 		return
 	}
 
+	p.client.config.Logger.Debug("Grace period expired for mandatory message",
+		"message_id", pending.MessageID,
+		"delivery_tag", deliveryTag)
+
 	// Lock the message state (per-message lock)
 	pending.mu.Lock()
 	defer pending.mu.Unlock()
 
 	// If callback already fired or message was returned, do nothing
-	if pending.CallbackFired || pending.Returned {
+	if pending.CallbackFired {
+		p.client.config.Logger.Debug("Grace period expired but callback already fired",
+			"message_id", pending.MessageID,
+			"delivery_tag", deliveryTag,
+			"final_outcome", pending.FinalOutcome)
 		return
 	}
+
+	if pending.Returned {
+		p.client.config.Logger.Debug("Grace period expired but message was returned",
+			"message_id", pending.MessageID,
+			"delivery_tag", deliveryTag)
+		return
+	}
+
+	p.client.config.Logger.Info("Finalizing mandatory message as success (no return received)",
+		"message_id", pending.MessageID,
+		"delivery_tag", deliveryTag)
 
 	// Finalize as success - message was confirmed and not returned
 	pending.CallbackFired = true
