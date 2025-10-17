@@ -17,8 +17,9 @@ type Publisher struct {
 
 	// Delivery assurance fields
 	deliveryAssuranceEnabled bool
-	confirmChannel           *amqp.Channel // Dedicated channel for delivery assurance
-	pendingMessages          map[uint64]*pendingMessage
+	confirmChannel           *amqp.Channel              // Dedicated channel for delivery assurance
+	pendingByMessageID       map[string]*pendingMessage // Keyed by MessageID for Return correlation
+	pendingByDeliveryTag     map[uint64]*pendingMessage // Keyed by DeliveryTag for Confirmation correlation
 	pendingMutex             sync.RWMutex
 	confirmChan              chan amqp.Confirmation
 	returnChan               chan amqp.Return
@@ -507,9 +508,15 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	})
 
 	// Add to pending messages before publishing
+	// Check for duplicate MessageID to prevent race conditions
 	p.pendingMutex.Lock()
-	p.pendingMessages[deliveryTag] = pending
-	pendingCount := int64(len(p.pendingMessages))
+	if _, exists := p.pendingByMessageID[messageID]; exists {
+		p.pendingMutex.Unlock()
+		return fmt.Errorf("message with ID '%s' is already pending delivery - MessageID must be unique for in-flight messages", messageID)
+	}
+	p.pendingByMessageID[messageID] = pending
+	p.pendingByDeliveryTag[deliveryTag] = pending
+	pendingCount := int64(len(p.pendingByMessageID))
 	p.pendingMutex.Unlock()
 
 	// Update statistics
@@ -541,8 +548,9 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	if err != nil {
 		// Remove from pending messages on publish error
 		p.pendingMutex.Lock()
-		delete(p.pendingMessages, deliveryTag)
-		pendingCount := int64(len(p.pendingMessages))
+		delete(p.pendingByMessageID, messageID)
+		delete(p.pendingByDeliveryTag, deliveryTag)
+		pendingCount := int64(len(p.pendingByMessageID))
 		p.pendingMutex.Unlock()
 
 		// Stop timeout timer
@@ -580,7 +588,7 @@ func (p *Publisher) Close() error {
 	// Shutdown delivery assurance if enabled
 	if p.deliveryAssuranceEnabled {
 		p.pendingMutex.RLock()
-		pendingCount := len(p.pendingMessages)
+		pendingCount := len(p.pendingByMessageID)
 		p.pendingMutex.RUnlock()
 
 		p.client.config.Logger.Info("Shutting down delivery assurance",
@@ -605,12 +613,12 @@ func (p *Publisher) Close() error {
 
 		// Cancel all pending message timeouts
 		p.pendingMutex.Lock()
-		for _, pending := range p.pendingMessages {
+		for _, pending := range p.pendingByMessageID {
 			if pending.TimeoutTimer != nil {
 				pending.TimeoutTimer.Stop()
 			}
 		}
-		finalPendingCount := len(p.pendingMessages)
+		finalPendingCount := len(p.pendingByMessageID)
 		p.pendingMutex.Unlock()
 
 		if finalPendingCount > 0 {
@@ -733,7 +741,8 @@ func (p *Publisher) initDeliveryAssurance() error {
 	// Initialize publisher fields
 	p.deliveryAssuranceEnabled = true
 	p.confirmChannel = confirmCh
-	p.pendingMessages = make(map[uint64]*pendingMessage)
+	p.pendingByMessageID = make(map[string]*pendingMessage)
+	p.pendingByDeliveryTag = make(map[uint64]*pendingMessage)
 	p.confirmChan = make(chan amqp.Confirmation, 100)
 	p.returnChan = make(chan amqp.Return, 100)
 	p.shutdownChan = make(chan struct{})
@@ -796,7 +805,7 @@ func (p *Publisher) processReturns() {
 func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 	// Get the pending message (with global lock)
 	p.pendingMutex.RLock()
-	pending, exists := p.pendingMessages[confirmation.DeliveryTag]
+	pending, exists := p.pendingByDeliveryTag[confirmation.DeliveryTag]
 	p.pendingMutex.RUnlock()
 
 	if !exists {
@@ -839,19 +848,13 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		"exchange", ret.Exchange,
 		"routing_key", ret.RoutingKey)
 
-	// Find the message (with global lock)
+	// Find the message by MessageID (with global lock)
 	p.pendingMutex.RLock()
-	var pending *pendingMessage
-	for _, pm := range p.pendingMessages {
-		if pm.MessageID == messageID {
-			pending = pm
-			break
-		}
-	}
-	pendingCount := len(p.pendingMessages)
+	pending, exists := p.pendingByMessageID[messageID]
+	pendingCount := len(p.pendingByMessageID)
 	p.pendingMutex.RUnlock()
 
-	if pending == nil {
+	if !exists || pending == nil {
 		// Message not found - may have already been finalized or timed out
 		// This is OK - just log and return
 		p.client.config.Logger.Warn("Return received for unknown message",
@@ -1013,8 +1016,9 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 
 	// Remove from pending messages after callback is done
 	p.pendingMutex.Lock()
-	delete(p.pendingMessages, pending.DeliveryTag)
-	pendingCount := int64(len(p.pendingMessages))
+	delete(p.pendingByMessageID, pending.MessageID)
+	delete(p.pendingByDeliveryTag, pending.DeliveryTag)
+	pendingCount := int64(len(p.pendingByMessageID))
 	p.pendingMutex.Unlock()
 
 	// Update pending count in stats
@@ -1049,7 +1053,7 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 	// Get the pending message (with global lock)
 	p.pendingMutex.RLock()
-	pending, exists := p.pendingMessages[deliveryTag]
+	pending, exists := p.pendingByDeliveryTag[deliveryTag]
 	p.pendingMutex.RUnlock()
 
 	if !exists {
@@ -1114,8 +1118,9 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 
 	// Remove from pending messages after callback is done
 	p.pendingMutex.Lock()
-	delete(p.pendingMessages, deliveryTag)
-	pendingCount := int64(len(p.pendingMessages))
+	delete(p.pendingByMessageID, pending.MessageID)
+	delete(p.pendingByDeliveryTag, deliveryTag)
+	pendingCount := int64(len(p.pendingByMessageID))
 	p.pendingMutex.Unlock()
 
 	// Update pending count in stats
@@ -1131,7 +1136,7 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	// Get the pending message (with global lock)
 	p.pendingMutex.RLock()
-	pending, exists := p.pendingMessages[deliveryTag]
+	pending, exists := p.pendingByDeliveryTag[deliveryTag]
 	p.pendingMutex.RUnlock()
 
 	if !exists {
@@ -1182,8 +1187,9 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 
 	// Remove from pending messages after callback is done
 	p.pendingMutex.Lock()
-	delete(p.pendingMessages, deliveryTag)
-	pendingCount := int64(len(p.pendingMessages))
+	delete(p.pendingByMessageID, pending.MessageID)
+	delete(p.pendingByDeliveryTag, deliveryTag)
+	pendingCount := int64(len(p.pendingByMessageID))
 	p.pendingMutex.Unlock()
 
 	// Update pending count in stats
