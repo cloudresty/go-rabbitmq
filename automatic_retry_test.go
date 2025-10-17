@@ -48,7 +48,7 @@ func TestAutomaticRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Create test topology
 	admin := client.Admin()
@@ -140,7 +140,7 @@ func TestAutomaticRetriesDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Create test topology
 	admin := client.Admin()
@@ -195,7 +195,7 @@ func TestAutomaticRetriesMemoryFootprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create publisher with automatic retries
 	publisherWithRetries, err := client.NewPublisher(
@@ -205,7 +205,7 @@ func TestAutomaticRetriesMemoryFootprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher with retries: %v", err)
 	}
-	defer publisherWithRetries.Close()
+	defer func() { _ = publisherWithRetries.Close() }()
 
 	// Create publisher without automatic retries
 	publisherWithoutRetries, err := client.NewPublisher(
@@ -214,7 +214,7 @@ func TestAutomaticRetriesMemoryFootprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create publisher without retries: %v", err)
 	}
-	defer publisherWithoutRetries.Close()
+	defer func() { _ = publisherWithoutRetries.Close() }()
 
 	// Verify that the config is set correctly
 	if !publisherWithRetries.config.enableAutomaticRetries {
