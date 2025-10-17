@@ -803,16 +803,17 @@ func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 		return
 	}
 
+	// Lock the message state (per-message lock)
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	// Log after acquiring lock to avoid race conditions
 	p.client.config.Logger.Debug("Confirmation received",
 		"message_id", pending.MessageID,
 		"delivery_tag", confirmation.DeliveryTag,
 		"ack", confirmation.Ack,
 		"mandatory", pending.Mandatory,
 		"returned", pending.Returned)
-
-	// Lock the message state (per-message lock)
-	pending.mu.Lock()
-	defer pending.mu.Unlock()
 
 	// Mark as confirmed or nacked
 	if confirmation.Ack {
@@ -861,15 +862,16 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		return
 	}
 
+	// Lock the message state (per-message lock)
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	// Log after acquiring lock to avoid race conditions
 	p.client.config.Logger.Debug("Return matched to pending message",
 		"message_id", messageID,
 		"delivery_tag", pending.DeliveryTag,
 		"confirmed", pending.Confirmed,
 		"callback_fired", pending.CallbackFired)
-
-	// Lock the message state (per-message lock)
-	pending.mu.Lock()
-	defer pending.mu.Unlock()
 
 	// Check if callback already fired
 	if pending.CallbackFired {
