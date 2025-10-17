@@ -19,7 +19,6 @@ type Publisher struct {
 	deliveryAssuranceEnabled bool
 	confirmChannel           *amqp.Channel // Dedicated channel for delivery assurance
 	pendingMessages          map[uint64]*pendingMessage
-	returnedMessages         map[uint64]bool // Track messages that have been returned
 	pendingMutex             sync.RWMutex
 	confirmChan              chan amqp.Confirmation
 	returnChan               chan amqp.Return
@@ -70,6 +69,13 @@ type pendingMessage struct {
 	RetryOnNack  bool
 	MaxRetries   int
 	RetryCount   int
+
+	// State tracking for mandatory messages
+	// For mandatory messages, we need both confirmation AND return status
+	Confirmed    bool   // Has broker confirmed receipt?
+	Returned     bool   // Has broker returned the message?
+	ReturnReason string // Reason for return (if returned)
+	Nacked       bool   // Has broker nacked the message?
 }
 
 // PublisherOption represents a functional option for publisher configuration
@@ -724,7 +730,6 @@ func (p *Publisher) initDeliveryAssurance() error {
 	p.deliveryAssuranceEnabled = true
 	p.confirmChannel = confirmCh
 	p.pendingMessages = make(map[uint64]*pendingMessage)
-	p.returnedMessages = make(map[uint64]bool)
 	p.confirmChan = make(chan amqp.Confirmation, 100)
 	p.returnChan = make(chan amqp.Return, 100)
 	p.shutdownChan = make(chan struct{})
@@ -786,88 +791,58 @@ func (p *Publisher) processReturns() {
 // handleConfirmation processes a single confirmation
 func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
 	p.pendingMutex.Lock()
-
-	// Check if this message was already returned
-	if p.returnedMessages[confirmation.DeliveryTag] {
-		// Message was returned, cleanup the returned flag and skip confirmation processing
-		delete(p.returnedMessages, confirmation.DeliveryTag)
-		p.pendingMutex.Unlock()
-		return
-	}
+	defer p.pendingMutex.Unlock()
 
 	pending, exists := p.pendingMessages[confirmation.DeliveryTag]
 	if !exists {
-		p.pendingMutex.Unlock()
 		return
 	}
 
-	// For mandatory messages with Ack, we need to wait briefly to see if a return arrives
-	// RabbitMQ sends both Return and Ack, but they can arrive in any order
-	if confirmation.Ack && pending.Mandatory {
-		// Keep the message in pending state temporarily
-		p.pendingMutex.Unlock()
+	// Mark as confirmed or nacked
+	if confirmation.Ack {
+		pending.Confirmed = true
+	} else {
+		pending.Nacked = true
+	}
 
-		// Wait for potential return notification (50ms should be more than enough for local delivery)
-		time.Sleep(50 * time.Millisecond)
+	// Check if we can finalize this message
+	// For mandatory messages: need both confirmation AND return status
+	// For non-mandatory messages: confirmation is enough
+	canFinalize := false
 
-		// Re-check if message was returned during the wait
-		p.pendingMutex.Lock()
-		if p.returnedMessages[confirmation.DeliveryTag] {
-			// Message was returned, cleanup and skip confirmation processing
-			delete(p.returnedMessages, confirmation.DeliveryTag)
-			p.pendingMutex.Unlock()
+	if pending.Nacked {
+		// Nack is always final
+		canFinalize = true
+	} else if !pending.Mandatory {
+		// Non-mandatory message: confirmation is enough
+		canFinalize = pending.Confirmed
+	} else {
+		// Mandatory message: need both confirmation AND return status
+		// If confirmed but not returned, we need to wait for potential return
+		// We'll use the timeout timer to finalize if no return arrives
+		if pending.Confirmed && pending.Returned {
+			// Both events received - can finalize
+			canFinalize = true
+		} else if pending.Confirmed && !pending.Returned {
+			// Confirmed but no return yet - start a grace period timer
+			// If no return arrives within 100ms, assume successful routing
+			if pending.TimeoutTimer != nil {
+				pending.TimeoutTimer.Stop()
+			}
+			pending.TimeoutTimer = time.AfterFunc(100*time.Millisecond, func() {
+				p.finalizeMandatoryMessage(confirmation.DeliveryTag)
+			})
+			// Don't finalize yet - wait for timer or return
 			return
 		}
-		// Message was not returned, proceed with success processing
-		p.pendingMutex.Unlock()
 	}
 
-	// Remove from pending messages
-	p.pendingMutex.Lock()
-	delete(p.pendingMessages, confirmation.DeliveryTag)
-	pendingCount := int64(len(p.pendingMessages))
-	p.pendingMutex.Unlock()
-
-	// Stop the timeout timer
-	if pending.TimeoutTimer != nil {
-		pending.TimeoutTimer.Stop()
+	if !canFinalize {
+		return
 	}
 
-	// Calculate duration
-	duration := time.Since(pending.PublishedAt)
-
-	// Update statistics
-	p.statsMutex.Lock()
-	if confirmation.Ack {
-		p.stats.TotalConfirmed++
-		p.stats.LastConfirmation = time.Now()
-	} else {
-		p.stats.TotalNacked++
-		p.stats.LastNack = time.Now()
-	}
-	p.stats.PendingMessages = pendingCount
-	p.statsMutex.Unlock()
-
-	// Record metrics
-	if confirmation.Ack {
-		p.client.config.Metrics.RecordDeliveryOutcome(DeliverySuccess, duration)
-	} else {
-		p.client.config.Metrics.RecordDeliveryOutcome(DeliveryNacked, duration)
-	}
-
-	// Invoke callback
-	if pending.Callback != nil {
-		if confirmation.Ack {
-			pending.Callback(pending.MessageID, DeliverySuccess, "")
-		} else {
-			// Handle nack - potentially retry
-			if pending.RetryOnNack && pending.RetryCount < pending.MaxRetries {
-				p.retryMessage(pending)
-			} else {
-				pending.Callback(pending.MessageID, DeliveryNacked, "message negatively acknowledged by broker")
-			}
-		}
-	}
+	// Finalize the message
+	p.finalizeMessage(pending, confirmation.DeliveryTag)
 }
 
 // handleReturn processes a returned message
@@ -877,6 +852,8 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	messageID := ret.MessageId
 
 	p.pendingMutex.Lock()
+	defer p.pendingMutex.Unlock()
+
 	var pending *pendingMessage
 	var deliveryTag uint64
 	for tag, pm := range p.pendingMessages {
@@ -887,16 +864,52 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		}
 	}
 	if pending == nil {
-		p.pendingMutex.Unlock()
 		return
 	}
-	// Mark as returned so handleConfirmation knows not to process it
-	p.returnedMessages[deliveryTag] = true
+
+	// Mark as returned and store the reason
+	pending.Returned = true
+	pending.ReturnReason = fmt.Sprintf("message returned: %s (reply code: %d)", ret.ReplyText, ret.ReplyCode)
+
+	// Check if we can finalize
+	// For mandatory messages, we need both return AND confirmation
+	canFinalize := pending.Confirmed || pending.Nacked
+
+	if canFinalize {
+		// Stop any pending grace period timer
+		if pending.TimeoutTimer != nil {
+			pending.TimeoutTimer.Stop()
+		}
+		p.finalizeMessage(pending, deliveryTag)
+	}
+	// If not confirmed yet, wait for confirmation to arrive
+}
+
+// finalizeMandatoryMessage is called by the grace period timer for mandatory messages
+// that were confirmed but no return was received
+func (p *Publisher) finalizeMandatoryMessage(deliveryTag uint64) {
+	p.pendingMutex.Lock()
+	defer p.pendingMutex.Unlock()
+
+	pending, exists := p.pendingMessages[deliveryTag]
+	if !exists {
+		return
+	}
+
+	// If still not returned after grace period, treat as successful routing
+	if pending.Confirmed && !pending.Returned {
+		p.finalizeMessage(pending, deliveryTag)
+	}
+}
+
+// finalizeMessage completes the delivery assurance process and invokes the callback
+// Must be called with pendingMutex held
+func (p *Publisher) finalizeMessage(pending *pendingMessage, deliveryTag uint64) {
+	// Remove from pending messages
 	delete(p.pendingMessages, deliveryTag)
 	pendingCount := int64(len(p.pendingMessages))
-	p.pendingMutex.Unlock()
 
-	// Stop the timeout timer
+	// Stop the timeout timer if still running
 	if pending.TimeoutTimer != nil {
 		pending.TimeoutTimer.Stop()
 	}
@@ -904,24 +917,70 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	// Calculate duration
 	duration := time.Since(pending.PublishedAt)
 
+	// Determine outcome
+	var outcome DeliveryOutcome
+	var errorMessage string
+
+	if pending.Nacked {
+		outcome = DeliveryNacked
+		errorMessage = "message negatively acknowledged by broker"
+	} else if pending.Returned {
+		outcome = DeliveryFailed
+		errorMessage = pending.ReturnReason
+	} else if pending.Confirmed {
+		outcome = DeliverySuccess
+		errorMessage = ""
+	} else {
+		// Should not happen, but handle gracefully
+		outcome = DeliveryTimeout
+		errorMessage = "message finalized without confirmation or return"
+	}
+
 	// Update statistics
 	p.statsMutex.Lock()
-	p.stats.TotalReturned++
-	p.stats.LastReturn = time.Now()
+	switch outcome {
+	case DeliverySuccess:
+		p.stats.TotalConfirmed++
+		p.stats.LastConfirmation = time.Now()
+	case DeliveryFailed:
+		p.stats.TotalReturned++
+		p.stats.LastReturn = time.Now()
+	case DeliveryNacked:
+		p.stats.TotalNacked++
+		p.stats.LastNack = time.Now()
+	case DeliveryTimeout:
+		p.stats.TotalTimedOut++
+	}
 	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
 	// Record metrics
-	p.client.config.Metrics.RecordDeliveryOutcome(DeliveryFailed, duration)
+	p.client.config.Metrics.RecordDeliveryOutcome(outcome, duration)
 
-	// Invoke callback
-	if pending.Callback != nil {
-		errorMsg := fmt.Sprintf("message returned: %s (reply code: %d)", ret.ReplyText, ret.ReplyCode)
-		pending.Callback(pending.MessageID, DeliveryFailed, errorMsg)
+	// Invoke callback (outside of lock to avoid deadlocks)
+	callback := pending.Callback
+	messageID := pending.MessageID
+
+	// Release lock before invoking callback
+	p.pendingMutex.Unlock()
+
+	if callback != nil {
+		if outcome == DeliveryNacked && pending.RetryOnNack && pending.RetryCount < pending.MaxRetries {
+			// Re-acquire lock for retry
+			p.pendingMutex.Lock()
+			p.retryMessage(pending)
+			return // Don't re-lock at the end
+		} else {
+			callback(messageID, outcome, errorMessage)
+		}
 	}
+
+	// Re-acquire lock since defer will unlock
+	p.pendingMutex.Lock()
 }
 
 // retryMessage attempts to retry a nacked message
+// Must be called with pendingMutex held
 func (p *Publisher) retryMessage(pending *pendingMessage) {
 	pending.RetryCount++
 
