@@ -294,14 +294,15 @@ func (c *Client) ConnectionName() string {
 func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 	// Default configuration
 	config := &publisherConfig{
-		DefaultExchange:     "",
-		Mandatory:           false,
-		Immediate:           false,
-		Persistent:          true,
-		ConfirmationEnabled: false,
-		ConfirmationTimeout: 5 * time.Second,
-		RetryPolicy:         NoRetry,
-		deliveryTimeout:     30 * time.Second, // Default delivery assurance timeout
+		DefaultExchange:      "",
+		Mandatory:            false,
+		Immediate:            false,
+		Persistent:           true,
+		ConfirmationEnabled:  false,
+		ConfirmationTimeout:  5 * time.Second,
+		RetryPolicy:          NoRetry,
+		deliveryTimeout:      30 * time.Second,       // Default delivery assurance timeout
+		mandatoryGracePeriod: 200 * time.Millisecond, // Default grace period for mandatory messages
 	}
 
 	// Apply options
