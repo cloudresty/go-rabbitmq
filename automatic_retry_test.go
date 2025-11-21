@@ -43,7 +43,7 @@ func TestAutomaticRetries(t *testing.T) {
 	publisher, err := client.NewPublisher(
 		WithDeliveryAssurance(),
 		WithDefaultDeliveryCallback(callback),
-		WithAutomaticRetries(2, 100*time.Millisecond), // 2 retries with 100ms delay
+		WithPublisherRetry(2, 100*time.Millisecond), // 2 retries with 100ms backoff
 	)
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
@@ -135,7 +135,7 @@ func TestAutomaticRetriesDisabled(t *testing.T) {
 	publisher, err := client.NewPublisher(
 		WithDeliveryAssurance(),
 		WithDefaultDeliveryCallback(callback),
-		// No WithAutomaticRetries option
+		// No WithPublisherRetry option
 	)
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
@@ -200,7 +200,7 @@ func TestAutomaticRetriesMemoryFootprint(t *testing.T) {
 	// Create publisher with automatic retries
 	publisherWithRetries, err := client.NewPublisher(
 		WithDeliveryAssurance(),
-		WithAutomaticRetries(3, 100*time.Millisecond),
+		WithPublisherRetry(3, 100*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create publisher with retries: %v", err)

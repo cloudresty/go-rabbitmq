@@ -318,7 +318,7 @@ steps := []saga.Step{
 
 &nbsp;
 
-An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
+### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 

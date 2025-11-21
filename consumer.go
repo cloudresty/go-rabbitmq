@@ -38,6 +38,10 @@ type consumerConfig struct {
 	Compressor     MessageCompressor
 	Encryptor      MessageEncryptor
 	Serializer     MessageSerializer
+
+	// Retry configuration
+	MaxRetries   int
+	RetryBackoff time.Duration
 }
 
 // ConsumerOption represents a functional option for consumer configuration
@@ -166,6 +170,16 @@ func WithConsumerEncryption(encryptor MessageEncryptor) ConsumerOption {
 func WithConsumerSerialization(serializer MessageSerializer) ConsumerOption {
 	return func(config *consumerConfig) {
 		config.Serializer = serializer
+	}
+}
+
+// WithConsumerRetry enables retry logic with backoff
+// maxAttempts: number of retry attempts before sending to DLX (requeue=false)
+// backoff: duration to wait before requeuing (requeue=true)
+func WithConsumerRetry(maxAttempts int, backoff time.Duration) ConsumerOption {
+	return func(config *consumerConfig) {
+		config.MaxRetries = maxAttempts
+		config.RetryBackoff = backoff
 	}
 }
 
@@ -511,7 +525,7 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 		return
 	}
 
-	// Check if this is a reject error
+	// Check if this is a reject error (user explicitly controls requeue)
 	if rejectErr, ok := err.(*RejectError); ok {
 		if err := delivery.Nack(false, rejectErr.Requeue); err != nil {
 			c.client.config.Logger.Error("Failed to nack message",
@@ -522,6 +536,67 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 
 		if rejectErr.Requeue {
 			c.client.config.Metrics.RecordMessageRequeued(queue)
+		}
+		return
+	}
+
+	// Header-based retry logic (works across distributed consumers)
+	if c.config.MaxRetries > 0 {
+		retryCount := c.getRetryCount(delivery)
+
+		if retryCount < c.config.MaxRetries {
+			// Still have retries left
+			c.client.config.Logger.Info("Retrying message",
+				"queue", queue,
+				"message_id", delivery.MessageId,
+				"attempt", retryCount+1,
+				"max_retries", c.config.MaxRetries)
+
+			// Apply backoff if configured
+			if c.config.RetryBackoff > 0 {
+				time.Sleep(c.config.RetryBackoff)
+			}
+
+			// For classic queues: Ack and republish with incremented retry count
+			// For quorum queues: Just Nack(requeue=true), broker tracks x-delivery-count
+			if c.isQuorumQueue(delivery) {
+				// Quorum queue: broker tracks delivery count automatically
+				if err := delivery.Nack(false, true); err != nil {
+					c.client.config.Logger.Error("Failed to nack (requeue) message",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+				}
+			} else {
+				// Classic queue: republish with incremented retry count
+				if err := c.republishWithRetry(queue, delivery, retryCount+1); err != nil {
+					c.client.config.Logger.Error("Failed to republish message for retry",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+					// Fall back to nack without requeue (send to DLX)
+					_ = delivery.Nack(false, false)
+					return
+				}
+				// Ack the original message since we republished it
+				_ = delivery.Ack(false)
+			}
+
+			c.client.config.Metrics.RecordMessageRequeued(queue)
+			return
+		}
+
+		// Max retries exceeded - send to DLX
+		c.client.config.Logger.Warn("Max retries exceeded, sending to DLX",
+			"queue", queue,
+			"message_id", delivery.MessageId,
+			"attempts", retryCount+1)
+
+		if err := delivery.Nack(false, false); err != nil {
+			c.client.config.Logger.Error("Failed to nack (no requeue) message",
+				"queue", queue,
+				"message_id", delivery.MessageId,
+				"error", err.Error())
 		}
 		return
 	}
@@ -539,6 +614,92 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 	if requeue {
 		c.client.config.Metrics.RecordMessageRequeued(queue)
 	}
+}
+
+// getRetryCount extracts the retry count from message headers
+// For quorum queues: uses x-delivery-count (broker-tracked)
+// For classic queues: uses x-retry-count (application-tracked)
+func (c *Consumer) getRetryCount(delivery *amqp.Delivery) int {
+	if delivery.Headers == nil {
+		return 0
+	}
+
+	// Try quorum queue header first (x-delivery-count)
+	if deliveryCount, ok := delivery.Headers["x-delivery-count"]; ok {
+		switch v := deliveryCount.(type) {
+		case int:
+			return v - 1 // x-delivery-count starts at 1, we want 0-based
+		case int32:
+			return int(v) - 1
+		case int64:
+			return int(v) - 1
+		}
+	}
+
+	// Fall back to classic queue header (x-retry-count)
+	if retryCount, ok := delivery.Headers["x-retry-count"]; ok {
+		switch v := retryCount.(type) {
+		case int:
+			return v
+		case int32:
+			return int(v)
+		case int64:
+			return int(v)
+		}
+	}
+
+	return 0
+}
+
+// isQuorumQueue checks if the message came from a quorum queue
+// Quorum queues have x-delivery-count header set by the broker
+func (c *Consumer) isQuorumQueue(delivery *amqp.Delivery) bool {
+	if delivery.Headers == nil {
+		return false
+	}
+	_, hasDeliveryCount := delivery.Headers["x-delivery-count"]
+	return hasDeliveryCount
+}
+
+// republishWithRetry republishes a message with an incremented retry count
+// This is used for classic queues where we need to track retries manually
+func (c *Consumer) republishWithRetry(queue string, delivery *amqp.Delivery, retryCount int) error {
+	// Create a copy of the headers
+	headers := make(amqp.Table)
+	if delivery.Headers != nil {
+		for k, v := range delivery.Headers {
+			headers[k] = v
+		}
+	}
+
+	// Set the retry count header
+	headers["x-retry-count"] = retryCount
+
+	// Preserve original message properties
+	msg := amqp.Publishing{
+		Headers:       headers,
+		ContentType:   delivery.ContentType,
+		Body:          delivery.Body,
+		MessageId:     delivery.MessageId,
+		CorrelationId: delivery.CorrelationId,
+		ReplyTo:       delivery.ReplyTo,
+		Expiration:    delivery.Expiration,
+		Timestamp:     delivery.Timestamp,
+		Type:          delivery.Type,
+		UserId:        delivery.UserId,
+		AppId:         delivery.AppId,
+		Priority:      delivery.Priority,
+		DeliveryMode:  delivery.DeliveryMode,
+	}
+
+	// Publish to the same queue (empty exchange, queue as routing key)
+	return c.ch.Publish(
+		"",    // default exchange
+		queue, // routing key = queue name
+		false, // mandatory
+		false, // immediate
+		msg,
+	)
 }
 
 // Close stops the consumer and closes its channel
