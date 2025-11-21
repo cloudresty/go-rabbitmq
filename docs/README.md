@@ -19,9 +19,9 @@ Please check out the latest documentation for the `go-rabbitmq` package, which p
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

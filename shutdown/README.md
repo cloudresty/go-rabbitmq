@@ -468,7 +468,7 @@ go func() {
 
 ### Common Issues
 
-1. **Shutdown Timeout**
+- **Shutdown Timeout**
 
 ```text
 WARN: Graceful shutdown timeout exceeded
@@ -480,7 +480,7 @@ Solution: Increase timeout or optimize component shutdown logic.
 
 &nbsp;
 
-2. **Component Registration After Shutdown**
+- **Component Registration After Shutdown**
 
 ```go
 if !manager.IsShutdown() {
@@ -492,7 +492,7 @@ if !manager.IsShutdown() {
 
 &nbsp;
 
-3. **In-Flight Operation Leaks**
+- **In-Flight Operation Leaks**
 
 ```go
 // Always use defer
@@ -512,9 +512,9 @@ For more examples and patterns, see the `examples/` directory in the main reposi
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

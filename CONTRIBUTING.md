@@ -594,9 +594,9 @@ Thank you for contributing to go-rabbitmq! Your efforts help make this package b
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

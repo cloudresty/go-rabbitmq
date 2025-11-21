@@ -9,7 +9,7 @@ on:
       force_update:
         description: 'Force update even if no new versions found'
         required: false
-        default: 'false'
+        default: false
         type: boolean
       reason:
         description: 'Reason for the update (optional)'
