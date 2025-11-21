@@ -17,6 +17,11 @@ This document covers all production-ready features designed for high-availabilit
 - [Connection Pooling](#connection-pooling)
 - [Graceful Shutdown](#graceful-shutdown)
 - [Message Reliability](#message-reliability)
+  - [Publisher Confirmations](#publisher-confirmations)
+  - [Delivery Assurance](#delivery-assurance)
+  - [Publisher Retry](#publisher-retry)
+  - [Consumer Reliability](#consumer-reliability)
+  - [Consumer Retry](#consumer-retry)
 - [Timeout Configuration](#timeout-configuration)
 - [Advanced Security & Performance](#advanced-security--performance)
 - [Production Checklist](#production-checklist)
@@ -935,6 +940,193 @@ func main() {
 
 &nbsp;
 
+### Delivery Assurance
+
+Asynchronous delivery tracking with callbacks for non-blocking, reliable message publishing.
+
+&nbsp;
+
+**Key Differences from Publisher Confirmations:**
+- **Publisher Confirmations** (`WithConfirmation`): Blocks on each publish until confirmed
+- **Delivery Assurance** (`WithDeliveryAssurance`): Asynchronous with callbacks, non-blocking
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Create client
+    client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
+    if err != nil {
+        log.Fatal("Failed to create client:", err)
+    }
+    defer client.Close()
+
+    // Publisher with delivery assurance and default callback
+    publisher, err := client.NewPublisher(
+        rabbitmq.WithDeliveryAssurance(),
+        rabbitmq.WithDefaultDeliveryCallback(func(messageID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+            switch outcome {
+            case rabbitmq.DeliverySuccess:
+                log.Printf("✓ Message %s delivered successfully", messageID)
+            case rabbitmq.DeliveryFailed:
+                log.Printf("✗ Message %s failed: %s", messageID, errorMessage)
+                // Trigger alerting, compensation logic, etc.
+            case rabbitmq.DeliveryNacked:
+                log.Printf("⚠ Message %s nacked by broker: %s", messageID, errorMessage)
+                // Broker rejected due to resource constraints
+            case rabbitmq.DeliveryTimeout:
+                log.Printf("⏱ Message %s timed out waiting for confirmation", messageID)
+            }
+        }),
+        rabbitmq.WithDeliveryTimeout(30*time.Second),
+        rabbitmq.WithMandatoryByDefault(true), // Detect routing failures
+    )
+    if err != nil {
+        log.Fatal("Failed to create publisher:", err)
+    }
+    defer publisher.Close()
+
+    ctx := context.Background()
+
+    // Publish with delivery assurance (non-blocking)
+    message := rabbitmq.NewMessage([]byte(`{"order_id": "12345", "amount": 99.99}`)).
+        WithContentType("application/json").
+        WithPersistent()
+
+    err = publisher.PublishWithDeliveryAssurance(ctx, "orders", "order.created", message,
+        rabbitmq.DeliveryOptions{
+            MessageID: "order-12345",
+            Mandatory: true,
+        })
+    if err != nil {
+        log.Printf("Failed to publish: %v", err)
+        return
+    }
+
+    log.Println("Message published, callback will be invoked asynchronously")
+
+    // Publish with per-message callback (overrides default)
+    err = publisher.PublishWithDeliveryAssurance(ctx, "orders", "order.updated", message,
+        rabbitmq.DeliveryOptions{
+            MessageID: "order-12346",
+            Mandatory: true,
+            Callback: func(msgID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+                if outcome == rabbitmq.DeliverySuccess {
+                    log.Printf("Order update confirmed: %s", msgID)
+                    // Update database status
+                } else {
+                    log.Printf("Order update failed: %s - %s", msgID, errorMessage)
+                    // Trigger retry or compensation
+                }
+            },
+        })
+    if err != nil {
+        log.Printf("Failed to publish: %v", err)
+    }
+
+    // Get delivery statistics
+    time.Sleep(2 * time.Second) // Wait for confirmations
+    stats := publisher.GetDeliveryStats()
+    log.Printf("Delivery Stats:")
+    log.Printf("  Total Published:  %d", stats.TotalPublished)
+    log.Printf("  Total Confirmed:  %d", stats.TotalConfirmed)
+    log.Printf("  Total Returned:   %d", stats.TotalReturned)
+    log.Printf("  Total Nacked:     %d", stats.TotalNacked)
+    log.Printf("  Total Timed Out:  %d", stats.TotalTimedOut)
+    log.Printf("  Pending Messages: %d", stats.PendingMessages)
+}
+```
+
+🔝 [back to top](#production-features)
+
+&nbsp;
+
+### Publisher Retry
+
+Automatic re-publishing of nacked messages with configurable backoff for at-least-once delivery guarantees.
+
+&nbsp;
+
+**When to Use:**
+- Critical messages that must be delivered (financial transactions, orders, etc.)
+- Transient broker issues (resource constraints, temporary unavailability)
+- At-least-once delivery requirements
+
+**Important:** This feature stores messages in memory until confirmed. Monitor memory usage for high-throughput scenarios.
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Create client
+    client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
+    if err != nil {
+        log.Fatal("Failed to create client:", err)
+    }
+    defer client.Close()
+
+    // Publisher with automatic retry on nack
+    publisher, err := client.NewPublisher(
+        rabbitmq.WithDeliveryAssurance(),
+        rabbitmq.WithPublisherRetry(3, 1*time.Second), // 3 retries, 1s backoff
+        rabbitmq.WithDefaultDeliveryCallback(func(messageID string, outcome rabbitmq.DeliveryOutcome, errorMessage string) {
+            switch outcome {
+            case rabbitmq.DeliverySuccess:
+                log.Printf("✓ Message %s delivered (may have been retried)", messageID)
+            case rabbitmq.DeliveryNacked:
+                log.Printf("⚠ Message %s nacked, will retry automatically", messageID)
+            case rabbitmq.DeliveryFailed:
+                log.Printf("✗ Message %s failed after all retries: %s", messageID, errorMessage)
+                // All retry attempts exhausted - trigger compensation
+            }
+        }),
+    )
+    if err != nil {
+        log.Fatal("Failed to create publisher:", err)
+    }
+    defer publisher.Close()
+
+    ctx := context.Background()
+
+    // Publish critical message - will be retried automatically if nacked
+    message := rabbitmq.NewMessage([]byte(`{"transaction_id": "txn-001", "amount": 1000}`)).
+        WithPersistent()
+
+    err = publisher.PublishWithDeliveryAssurance(ctx, "payments", "payment.process", message,
+        rabbitmq.DeliveryOptions{
+            MessageID: "payment-txn-001",
+            Mandatory: true,
+        })
+    if err != nil {
+        log.Printf("Failed to publish: %v", err)
+        return
+    }
+
+    log.Println("Critical message published with automatic retry protection")
+    time.Sleep(5 * time.Second) // Wait for potential retries and confirmation
+}
+```
+
+🔝 [back to top](#production-features)
+
+&nbsp;
+
 ### Consumer Reliability
 
 ```go
@@ -1111,10 +1303,190 @@ func main() {
 
 &nbsp;
 
+### Consumer Retry
+
+Header-based automatic retry mechanism that works across distributed consumers with support for both Quorum and Classic queues.
+
+&nbsp;
+
+**Key Features:**
+- **Distributed-Safe**: Retry count travels with the message in headers
+- **Quorum Queue Support**: Uses broker-tracked `x-delivery-count` header
+- **Classic Queue Support**: Uses application-tracked `x-retry-count` header
+- **Automatic DLX Routing**: Sends to Dead Letter Exchange after max retries
+- **Configurable Backoff**: Optional delay between retry attempts
+
+**How It Works:**
+
+**Quorum Queues (Recommended):**
+1. Message fails → Consumer calls `Nack(requeue=true)`
+2. RabbitMQ increments `x-delivery-count` header automatically
+3. Any consumer instance receives the message and checks the header
+4. If count ≥ maxAttempts → `Nack(requeue=false)` → DLX
+
+**Classic Queues (Fallback):**
+1. Message fails → Consumer calls `Ack()` to remove original
+2. Consumer republishes to tail of queue with `x-retry-count` incremented
+3. Any consumer instance receives the message and checks the header
+4. If count ≥ maxAttempts → `Nack(requeue=false)` → DLX
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "log"
+    "time"
+
+    "github.com/cloudresty/go-rabbitmq"
+)
+
+func main() {
+    // Create client
+    client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
+    if err != nil {
+        log.Fatal("Failed to create client:", err)
+    }
+    defer client.Close()
+
+    admin := client.Admin()
+    ctx := context.Background()
+
+    // Set up Dead Letter Exchange and Queue
+    err = admin.DeclareExchange(ctx, "orders.dlx", rabbitmq.ExchangeTypeDirect)
+    if err != nil {
+        log.Fatal("Failed to declare DLX:", err)
+    }
+
+    _, err = admin.DeclareQueue(ctx, "orders.dlq")
+    if err != nil {
+        log.Fatal("Failed to declare DLQ:", err)
+    }
+
+    err = admin.BindQueue(ctx, "orders.dlq", "orders.dlx", "failed")
+    if err != nil {
+        log.Fatal("Failed to bind DLQ:", err)
+    }
+
+    // Declare main queue with DLX configured (Quorum queue by default)
+    _, err = admin.DeclareQueue(ctx, "orders.processing",
+        rabbitmq.WithDeadLetter("orders.dlx", "failed"),
+        rabbitmq.WithDeliveryLimit(3), // Quorum queue delivery limit
+    )
+    if err != nil {
+        log.Fatal("Failed to declare queue:", err)
+    }
+
+    // Consumer with automatic retry (3 attempts, 1s backoff)
+    consumer, err := client.NewConsumer(
+        rabbitmq.WithConsumerRetry(3, 1*time.Second),
+        rabbitmq.WithPrefetchCount(10),
+    )
+    if err != nil {
+        log.Fatal("Failed to create consumer:", err)
+    }
+    defer consumer.Close()
+
+    // Consume with automatic retry handling
+    err = consumer.Consume(ctx, "orders.processing", func(ctx context.Context, delivery *rabbitmq.Delivery) error {
+        log.Printf("Processing order: %s", delivery.MessageId)
+
+        // Simulate processing that might fail
+        if err := processOrder(delivery.Body); err != nil {
+            log.Printf("Order processing failed: %v", err)
+            return err // Consumer will automatically retry based on header count
+        }
+
+        log.Printf("Order processed successfully: %s", delivery.MessageId)
+        return nil // Success - clears retry tracking
+    })
+    if err != nil {
+        log.Fatal("Consumer error:", err)
+    }
+}
+
+func processOrder(body []byte) error {
+    // Simulate transient failures
+    // In production, this could be database timeouts, API failures, etc.
+    if time.Now().Unix()%3 == 0 {
+        return errors.New("transient processing error")
+    }
+    return nil
+}
+```
+
+**Example with Classic Queue:**
+
+```go
+// Declare classic queue with DLX
+_, err = admin.DeclareQueue(ctx, "legacy.processing",
+    rabbitmq.WithClassicQueue(), // Explicitly use classic queue
+    rabbitmq.WithDeadLetter("orders.dlx", "failed"),
+)
+if err != nil {
+    log.Fatal("Failed to declare classic queue:", err)
+}
+
+// Consumer works the same way - automatically detects queue type
+consumer, err := client.NewConsumer(
+    rabbitmq.WithConsumerRetry(3, 1*time.Second),
+)
+if err != nil {
+    log.Fatal("Failed to create consumer:", err)
+}
+defer consumer.Close()
+
+// Consume - retry logic adapts to classic queue automatically
+err = consumer.Consume(ctx, "legacy.processing", func(ctx context.Context, delivery *rabbitmq.Delivery) error {
+    // Same handler code - retry mechanism adapts automatically
+    return processOrder(delivery.Body)
+})
+```
+
+**Monitoring Retry Behavior:**
+
+```go
+err = consumer.Consume(ctx, "orders.processing", func(ctx context.Context, delivery *rabbitmq.Delivery) error {
+    // Check if message has been retried
+    retryCount := 0
+    if delivery.Headers != nil {
+        if count, ok := delivery.Headers["x-delivery-count"]; ok {
+            // Quorum queue
+            if c, ok := count.(int); ok {
+                retryCount = c - 1
+            }
+        } else if count, ok := delivery.Headers["x-retry-count"]; ok {
+            // Classic queue
+            if c, ok := count.(int); ok {
+                retryCount = c
+            }
+        }
+    }
+
+    log.Printf("Processing message %s (attempt %d)", delivery.MessageId, retryCount+1)
+
+    if err := processOrder(delivery.Body); err != nil {
+        log.Printf("Processing failed (attempt %d): %v", retryCount+1, err)
+        return err
+    }
+
+    log.Printf("Processing succeeded on attempt %d", retryCount+1)
+    return nil
+})
+```
+
+🔝 [back to top](#production-features)
+
+&nbsp;
+
 ### Message Reliability Features
 
 - **Publisher Confirmations**: Broker acknowledgments for message delivery guarantees
+- **Delivery Assurance**: Asynchronous confirmation tracking with callbacks
+- **Publisher Retry**: Automatic re-publishing of nacked messages
 - **Consumer Acknowledgments**: Manual message acknowledgment with retry control
+- **Consumer Retry**: Header-based retry tracking across distributed consumers
 - **Dead Letter Queues**: Manual configuration for failed message processing
 - **Message Persistence**: Durable message storage surviving broker restarts
 - **Delivery Tracking**: Comprehensive delivery status and retry monitoring
@@ -1963,7 +2335,7 @@ Essential items for production deployment and operational excellence.
 
 &nbsp;
 
-An open source project brought to you by the [Cloudresty](https://cloudresty.com) team.
+### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 

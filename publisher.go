@@ -288,11 +288,11 @@ func WithMandatoryGracePeriod(duration time.Duration) PublisherOption {
 	}
 }
 
-// WithAutomaticRetries enables true, automatic re-publishing of nacked messages.
+// WithPublisherRetry enables true, automatic re-publishing of nacked messages.
 //
 // When a message is nacked by the broker (typically due to transient issues like
 // resource constraints), this feature will automatically re-publish the message
-// up to maxAttempts times with the specified delay between attempts.
+// up to maxAttempts times with the specified backoff between attempts.
 //
 // ⚠️ IMPORTANT: This feature stores the full message in memory until it is confirmed,
 // which will increase the publisher's memory footprint. Use it for critical messages
@@ -300,22 +300,22 @@ func WithMandatoryGracePeriod(duration time.Duration) PublisherOption {
 //
 // Parameters:
 //   - maxAttempts: Maximum number of retry attempts (e.g., 3 means original + 3 retries = 4 total attempts)
-//   - delay: Time to wait between retry attempts (e.g., 1*time.Second for exponential backoff use a custom callback)
+//   - backoff: Time to wait between retry attempts (e.g., 1*time.Second)
 //
 // Example:
 //
 //	publisher, err := client.NewPublisher(
 //	    rabbitmq.WithDeliveryAssurance(),
-//	    rabbitmq.WithAutomaticRetries(3, 1*time.Second), // Retry up to 3 times with 1s delay
+//	    rabbitmq.WithPublisherRetry(3, 1*time.Second), // Retry up to 3 times with 1s backoff
 //	)
 //
 // Note: If you need more control over retry logic (e.g., exponential backoff, custom
 // retry conditions), implement your own retry logic in the delivery callback instead.
-func WithAutomaticRetries(maxAttempts int, delay time.Duration) PublisherOption {
+func WithPublisherRetry(maxAttempts int, backoff time.Duration) PublisherOption {
 	return func(config *publisherConfig) {
 		config.enableAutomaticRetries = true
 		config.maxRetryAttempts = maxAttempts
-		config.retryDelay = delay
+		config.retryDelay = backoff
 	}
 }
 
