@@ -362,9 +362,9 @@ func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

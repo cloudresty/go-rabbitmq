@@ -251,9 +251,9 @@ All compressor implementations are thread-safe and can be used concurrently acro
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

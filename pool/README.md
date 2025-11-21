@@ -450,9 +450,9 @@ The connection pool provides thread-safe access to multiple RabbitMQ connections
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

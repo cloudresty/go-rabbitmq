@@ -512,9 +512,9 @@ For more examples and patterns, see the `examples/` directory in the main reposi
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

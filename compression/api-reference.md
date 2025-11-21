@@ -209,9 +209,9 @@ All compression operations return descriptive errors:
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 

@@ -259,9 +259,9 @@ log.Printf("Content type: %s", serializer.ContentType())
 
 &nbsp;
 
----
-
 &nbsp;
+
+---
 
 ### Cloudresty
 
