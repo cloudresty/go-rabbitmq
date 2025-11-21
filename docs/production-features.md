@@ -947,6 +947,7 @@ Asynchronous delivery tracking with callbacks for non-blocking, reliable message
 &nbsp;
 
 **Key Differences from Publisher Confirmations:**
+
 - **Publisher Confirmations** (`WithConfirmation`): Blocks on each publish until confirmed
 - **Delivery Assurance** (`WithDeliveryAssurance`): Asynchronous with callbacks, non-blocking
 
@@ -1056,6 +1057,7 @@ Automatic re-publishing of nacked messages with configurable backoff for at-leas
 &nbsp;
 
 **When to Use:**
+
 - Critical messages that must be delivered (financial transactions, orders, etc.)
 - Transient broker issues (resource constraints, temporary unavailability)
 - At-least-once delivery requirements
@@ -1310,6 +1312,7 @@ Header-based automatic retry mechanism that works across distributed consumers w
 &nbsp;
 
 **Key Features:**
+
 - **Distributed-Safe**: Retry count travels with the message in headers
 - **Quorum Queue Support**: Uses broker-tracked `x-delivery-count` header
 - **Classic Queue Support**: Uses application-tracked `x-retry-count` header
@@ -1319,12 +1322,14 @@ Header-based automatic retry mechanism that works across distributed consumers w
 **How It Works:**
 
 **Quorum Queues (Recommended):**
+
 1. Message fails → Consumer calls `Nack(requeue=true)`
 2. RabbitMQ increments `x-delivery-count` header automatically
 3. Any consumer instance receives the message and checks the header
 4. If count ≥ maxAttempts → `Nack(requeue=false)` → DLX
 
 **Classic Queues (Fallback):**
+
 1. Message fails → Consumer calls `Ack()` to remove original
 2. Consumer republishes to tail of queue with `x-retry-count` incremented
 3. Any consumer instance receives the message and checks the header
