@@ -23,7 +23,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to create client:", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Declare exchange and queue for testing
 	admin := client.Admin()
@@ -95,7 +95,7 @@ func simpleExample(client *rabbitmq.Client) {
 	if err != nil {
 		log.Fatal("Failed to create publisher:", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publish a message
 	message := rabbitmq.NewMessage([]byte(`{"event": "user.created", "user_id": "123"}`)).
@@ -133,7 +133,7 @@ func advancedCallbackExample(client *rabbitmq.Client) {
 	if err != nil {
 		log.Fatal("Failed to create publisher:", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publish multiple messages with custom callbacks
 	for i := 1; i <= 3; i++ {
@@ -195,7 +195,7 @@ func mandatoryExample(client *rabbitmq.Client) {
 	if err != nil {
 		log.Fatal("Failed to create publisher:", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publish to a non-existent routing key (will be returned)
 	message := rabbitmq.NewMessage([]byte(`{"test": "routing failure"}`))
@@ -229,7 +229,7 @@ func statisticsExample(client *rabbitmq.Client) {
 	if err != nil {
 		log.Fatal("Failed to create publisher:", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publish several messages
 	for i := 1; i <= 5; i++ {
@@ -277,7 +277,7 @@ func concurrentExample(client *rabbitmq.Client) {
 	if err != nil {
 		log.Fatal("Failed to create publisher:", err)
 	}
-	defer publisher.Close()
+	defer func() { _ = publisher.Close() }()
 
 	// Publish messages concurrently
 	var wg sync.WaitGroup
