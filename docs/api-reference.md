@@ -94,9 +94,15 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 |----------|-------------|
 | `WithDefaultExchange(exchange string)` | Sets default exchange for publishing when not specified |
 | `WithMandatory()` | Enables mandatory publishing (message must be routable) |
+| `WithMandatoryByDefault(mandatory bool)` | Sets default mandatory flag for all publishes (can be overridden per message) |
+| `WithMandatoryGracePeriod(duration time.Duration)` | Sets grace period to wait for mandatory message returns before timing out |
 | `WithImmediate()` | Enables immediate publishing (message must be immediately deliverable) |
 | `WithPersistent()` | Makes all published messages persistent by default |
-| `WithConfirmation(timeout time.Duration)` | Enables publisher confirmations with timeout |
+| `WithConfirmation(timeout time.Duration)` | Enables synchronous publisher confirmations with timeout (blocks on each publish) |
+| `WithDeliveryAssurance()` | Enables asynchronous delivery tracking with callbacks (non-blocking, use with `PublishWithDeliveryAssurance`) |
+| `WithDefaultDeliveryCallback(callback DeliveryCallback)` | Sets default callback for delivery outcomes (Success, Failed, Nacked, Timeout) |
+| `WithDeliveryTimeout(timeout time.Duration)` | Sets timeout for delivery confirmations when using delivery assurance |
+| `WithPublisherRetry(maxAttempts int, backoff time.Duration)` | Enables automatic re-publishing of nacked messages (stores messages in memory until confirmed) |
 | `WithRetryPolicy(policy RetryPolicy)` | Sets retry policy for failed publish operations |
 | `WithCompression(compressor MessageCompressor)` | Sets message compression (use `compression` sub-package) |
 | `WithCompressionThreshold(threshold int)` | Sets compression threshold in bytes |
