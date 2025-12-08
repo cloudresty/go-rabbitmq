@@ -206,14 +206,10 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	defer func() { _ = ch.Close() }()
 
-	// Perform a passive queue declare on a built-in exchange to verify broker responsiveness
-	_, err = ch.QueueDeclarePassive("amq.direct", false, false, false, false, nil)
+	// Perform a passive exchange declare on a built-in exchange to verify broker responsiveness
+	// amq.direct is a default exchange that always exists in RabbitMQ
+	err = ch.ExchangeDeclarePassive("amq.direct", "direct", true, false, false, false, nil)
 	if err != nil {
-		// This is expected to fail, but if we get here, the broker is responsive
-		if amqpErr, ok := err.(*amqp.Error); ok && amqpErr.Code == 404 {
-			// Queue not found is expected for amq.direct, connection is good
-			return nil
-		}
 		return fmt.Errorf("broker health check failed: %w", err)
 	}
 
