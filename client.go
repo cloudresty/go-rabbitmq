@@ -375,6 +375,14 @@ func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
 	}
 
+	// Set QoS (prefetch) on the channel
+	if config.PrefetchCount > 0 || config.PrefetchSize > 0 {
+		if err := ch.Qos(config.PrefetchCount, config.PrefetchSize, false); err != nil {
+			_ = ch.Close() // Clean up channel on error
+			return nil, fmt.Errorf("failed to set QoS: %w", err)
+		}
+	}
+
 	consumer := &Consumer{
 		client: c,
 		config: config,
