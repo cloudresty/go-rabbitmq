@@ -60,6 +60,9 @@ type publisherConfig struct {
 	enableAutomaticRetries bool          // Enable true automatic re-publishing of nacked messages
 	maxRetryAttempts       int           // Maximum number of retry attempts
 	retryDelay             time.Duration // Delay between retry attempts
+
+	// Connection error retry configuration
+	maxConnectionRetries int // Max attempts to refresh channel and retry publish (0 = unlimited, default 3)
 }
 
 // pendingMessage tracks a message awaiting delivery confirmation
@@ -351,6 +354,34 @@ func WithPublisherRetry(maxAttempts int, backoff time.Duration) PublisherOption 
 	}
 }
 
+// WithPublisherConnectionRetry sets the maximum number of retry attempts for
+// channel/connection errors during publish operations.
+//
+// When a publish fails with "channel/connection is not open", "channel already closed",
+// or "connection closed" errors, the publisher will:
+//  1. Wait using the ReconnectPolicy delay
+//  2. Refresh the channel
+//  3. Retry the publish
+//
+// Parameters:
+//   - maxAttempts: Maximum retry attempts. Use 0 for unlimited retries.
+//     Default is 3 if not specified.
+//
+// Example:
+//
+//	// Retry for up to 2 hours during RabbitMQ maintenance windows
+//	// With exponential backoff (5s, 10s, 20s, 40s, ... capped at 5min)
+//	// This allows ~24 retries over 2 hours
+//	rabbitmq.WithPublisherConnectionRetry(0), // Unlimited - rely on context timeout
+//
+// Note: The actual timeout is controlled by the context passed to Publish().
+// Set maxAttempts=0 and use context.WithTimeout() for time-based limits.
+func WithPublisherConnectionRetry(maxAttempts int) PublisherOption {
+	return func(config *publisherConfig) {
+		config.maxConnectionRetries = maxAttempts
+	}
+}
+
 // Core publishing methods
 
 // Publish publishes a message to the specified exchange and routing key
@@ -408,9 +439,15 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 
 	// Publish message with auto-reconnect retry support
 	var publishErr error
-	maxConnRetries := 3 // Max channel refresh attempts for a single publish
+	// Use configured max retries (0 = unlimited)
+	maxConnRetries := p.config.maxConnectionRetries
 
-	for attempt := 0; attempt <= maxConnRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
+		// Check if we've exceeded max retries (skip check if unlimited)
+		if maxConnRetries > 0 && attempt > maxConnRetries {
+			break
+		}
+
 		publishErr = p.ch.PublishWithContext(
 			ctx,
 			exchange,
@@ -427,6 +464,14 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 
 		// Check if this is a channel/connection error and AutoReconnect is enabled
 		if isChannelError(publishErr) && p.client.config.AutoReconnect {
+			// Check context cancellation FIRST (important for timeout control with unlimited retries)
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			default:
+			}
+
 			// Check if ReconnectPolicy allows retry
 			if p.client.config.ReconnectPolicy != nil && !p.client.config.ReconnectPolicy.ShouldRetry(attempt+1, publishErr) {
 				p.client.config.Logger.Warn("ReconnectPolicy indicates no more retries",
@@ -436,19 +481,17 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 				break
 			}
 
+			// Log max_attempts as "unlimited" when 0
+			maxAttemptsLog := any(maxConnRetries)
+			if maxConnRetries == 0 {
+				maxAttemptsLog = "unlimited"
+			}
+
 			p.client.config.Logger.Warn("Publish failed due to channel/connection error, attempting to refresh channel",
 				"error", publishErr,
 				"attempt", attempt+1,
-				"max_attempts", maxConnRetries+1,
+				"max_attempts", maxAttemptsLog,
 				"message_id", message.MessageID)
-
-			// Check if context is still valid
-			select {
-			case <-ctx.Done():
-				publishErr = ctx.Err()
-				break
-			default:
-			}
 
 			// Calculate delay based on ReconnectPolicy if available, otherwise use ReconnectDelay
 			var reconnectDelay time.Duration
@@ -820,9 +863,15 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	// Publish message using the dedicated confirmation channel
 	// With auto-reconnect retry support for connection/channel errors
 	var publishErr error
-	maxConnRetries := 3 // Max channel refresh attempts for a single publish
+	// Use configured max retries (0 = unlimited)
+	maxConnRetries := p.config.maxConnectionRetries
 
-	for attempt := 0; attempt <= maxConnRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
+		// Check if we've exceeded max retries (skip check if unlimited)
+		if maxConnRetries > 0 && attempt > maxConnRetries {
+			break
+		}
+
 		publishErr = p.confirmChannel.PublishWithContext(
 			ctx,
 			exchange,
@@ -839,6 +888,14 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 
 		// Check if this is a channel/connection error and AutoReconnect is enabled
 		if isChannelError(publishErr) && p.client.config.AutoReconnect {
+			// Check context cancellation FIRST (important for timeout control with unlimited retries)
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			default:
+			}
+
 			// Check if ReconnectPolicy allows retry
 			if p.client.config.ReconnectPolicy != nil && !p.client.config.ReconnectPolicy.ShouldRetry(attempt+1, publishErr) {
 				p.client.config.Logger.Warn("ReconnectPolicy indicates no more retries",
@@ -848,19 +905,17 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 				break
 			}
 
+			// Log max_attempts as "unlimited" when 0
+			maxAttemptsLog := any(maxConnRetries)
+			if maxConnRetries == 0 {
+				maxAttemptsLog = "unlimited"
+			}
+
 			p.client.config.Logger.Warn("Publish failed due to channel/connection error, attempting to refresh channel",
 				"error", publishErr,
 				"attempt", attempt+1,
-				"max_attempts", maxConnRetries+1,
+				"max_attempts", maxAttemptsLog,
 				"message_id", messageID)
-
-			// Check if context is still valid before waiting
-			select {
-			case <-ctx.Done():
-				publishErr = ctx.Err()
-				break
-			default:
-			}
 
 			// Calculate delay based on ReconnectPolicy if available, otherwise use ReconnectDelay
 			var reconnectDelay time.Duration
