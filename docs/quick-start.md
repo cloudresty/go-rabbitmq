@@ -74,6 +74,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#quick-start)
 
 &nbsp;
@@ -90,6 +92,8 @@ export RABBITMQ_PASSWORD=securepassword
 export RABBITMQ_VHOST=/production
 export RABBITMQ_CONNECTION_NAME=order-service
 ```
+
+&nbsp;
 
 🔝 [back to top](#quick-start)
 
@@ -127,6 +131,8 @@ shutdownManager := shutdown.NewManager()
 shutdownManager.RegisterComponents(publisher, consumer, pool)
 shutdownManager.SetupSignalHandler()
 ```
+
+&nbsp;
 
 🔝 [back to top](#quick-start)
 
@@ -247,6 +253,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#quick-start)
 
 &nbsp;
@@ -330,6 +338,8 @@ func createOrderHandler(ctx context.Context, s *saga.Saga, step *saga.Step) erro
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#quick-start)
 
 &nbsp;
@@ -386,6 +396,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#quick-start)
 
 &nbsp;
@@ -397,5 +409,7 @@ func main() {
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

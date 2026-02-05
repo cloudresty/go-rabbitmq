@@ -18,6 +18,8 @@ The `performance` package provides comprehensive performance monitoring and metr
 - **Lightweight** - Minimal overhead suitable for production environments
 - **Comprehensive Stats** - Detailed statistics and metrics export
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -104,6 +106,8 @@ func printStats(stats performance.Stats) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -137,6 +141,8 @@ func monitorConsumer(monitor *performance.Monitor, consumer *rabbitmq.Consumer) 
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -164,6 +170,8 @@ fmt.Printf("Publish rate from stats: %.2f ops/sec\n", stats.PublishRate)
 fmt.Printf("Consume rate: %.2f ops/sec\n", stats.ConsumeRate)
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -187,6 +195,8 @@ rate := tracker.Rate()
 fmt.Printf("Rate: %.2f events/sec\n", rate)
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -205,6 +215,8 @@ fmt.Printf("  Reconnections: %d\n", stats.ReconnectionsTotal)
 fmt.Printf("  Last Connection: %v\n", stats.LastConnectionTime)
 fmt.Printf("  Last Reconnection: %v\n", stats.LastReconnectionTime)
 ```
+
+&nbsp;
 
 🔝 [back to top](#performance-monitoring-package)
 
@@ -230,6 +242,8 @@ fmt.Printf("  Success Rate: %.2f%%\n", stats.ConsumeSuccessRate*100)
 fmt.Printf("  Operations/sec: %.2f\n", stats.ConsumeRate)
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -249,6 +263,8 @@ fmt.Printf("  P50 (median): %v\n", stats.ConsumeLatencyP50)
 fmt.Printf("  P95: %v\n", stats.ConsumeLatencyP95)
 fmt.Printf("  P99: %v\n", stats.ConsumeLatencyP99)
 ```
+
+&nbsp;
 
 🔝 [back to top](#performance-monitoring-package)
 
@@ -296,6 +312,8 @@ func recordToPrometheus(monitor *performance.Monitor) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -333,6 +351,8 @@ func exportToInfluxDB(stats performance.Stats) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -364,6 +384,8 @@ func (mp *MonitoredPublisher) Publish(ctx context.Context, queue string, msg rab
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -394,6 +416,8 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -421,6 +445,8 @@ successRate := monitor.GetSuccessRate()
 // Reset all counters
 monitor.Reset()
 ```
+
+&nbsp;
 
 🔝 [back to top](#performance-monitoring-package)
 
@@ -472,6 +498,8 @@ if time.Since(lastReset) > time.Hour {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -481,7 +509,7 @@ if time.Since(lastReset) > time.Hour {
 ### Stats Structure
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `ConnectionsTotal` | `uint64` | Total connection attempts |
 | `ReconnectionsTotal` | `uint64` | Total reconnection attempts |
 | `IsConnected` | `bool` | Current connection status |
@@ -504,6 +532,8 @@ if time.Since(lastReset) > time.Hour {
 | `ConsumeLatencyP95` | `time.Duration` | 95th percentile consume latency |
 | `ConsumeLatencyP99` | `time.Duration` | 99th percentile consume latency |
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
@@ -514,6 +544,8 @@ if time.Since(lastReset) > time.Hour {
 - **Rate Tracking**: Uses a 1-minute sliding window by default
 - **Thread Safety**: All operations use atomic operations or mutexes for safety
 - **Overhead**: Minimal performance impact - typically < 1% overhead
+
+&nbsp;
 
 🔝 [back to top](#performance-monitoring-package)
 
@@ -534,11 +566,15 @@ go test -bench=. ./performance
 go test -race ./performance
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-monitoring-package)
 
 &nbsp;
 
 The performance monitor provides thread-safe operation tracking and comprehensive metrics collection.
+
+&nbsp;
 
 🔝 [back to top](#performance-monitoring-package)
 
@@ -551,5 +587,7 @@ The performance monitor provides thread-safe operation tracking and comprehensiv
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

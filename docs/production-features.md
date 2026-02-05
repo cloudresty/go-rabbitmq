@@ -78,6 +78,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -95,6 +97,8 @@ export RABBITMQ_DIAL_TIMEOUT=30s
 export RABBITMQ_CHANNEL_TIMEOUT=10s
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -107,6 +111,8 @@ export RABBITMQ_CHANNEL_TIMEOUT=10s
 - **Automatic Recovery**: Seamless operation resumption after reconnection
 - **Zero Message Loss**: In-flight message protection during reconnection
 - **Heartbeat Monitoring**: Proactive connection health detection
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -175,6 +181,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -192,6 +200,8 @@ export RABBITMQ_AUTO_RECONNECT=true
 export RABBITMQ_HEARTBEAT=30s
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -204,6 +214,8 @@ export RABBITMQ_HEARTBEAT=30s
 - **Seamless Failover**: Zero-configuration failover to backup nodes
 - **Node Recovery**: Automatic reconnection to recovered nodes
 - **Cluster Topology Awareness**: Adapts to changing cluster configurations
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -248,6 +260,8 @@ func main() {
     log.Printf("Connection name: %s", client.ConnectionName())
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -306,6 +320,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -318,6 +334,8 @@ func main() {
 - **Cluster Status**: Health status across multiple cluster nodes
 - **Timeout Protection**: Configurable timeouts prevent hanging health checks
 - **Integration Ready**: Easy integration with monitoring systems and alerting
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -443,6 +461,8 @@ client, err := rabbitmq.NewClient(
 - **Production Ready**: Enabled by default with sensible intervals for enterprise use
 - **Configurable**: Full control over validation behavior for different environments
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -534,6 +554,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -552,6 +574,8 @@ export RABBITMQ_PUBLISHER_CONFIRMATION_TIMEOUT=10s
 export RABBITMQ_PUBLISHER_SHUTDOWN_TIMEOUT=30s
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -564,6 +588,8 @@ export RABBITMQ_PUBLISHER_SHUTDOWN_TIMEOUT=30s
 - **Resource Optimization**: Efficient connection reuse and resource management
 - **Failover Support**: Pool-level failover with connection replacement
 - **Performance Metrics**: Detailed statistics and performance monitoring
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -667,6 +693,8 @@ func main() {
     log.Println("Application shutdown complete")
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -835,6 +863,8 @@ func consumerLoop(ctx context.Context, consumer *rabbitmq.Consumer) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -847,6 +877,8 @@ func consumerLoop(ctx context.Context, consumer *rabbitmq.Consumer) {
 - **Resource Coordination**: Unified shutdown across multiple components
 - **Zero Message Loss**: Ensures message processing completion before exit
 - **Context Awareness**: Propagates shutdown signals through operation contexts
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -935,6 +967,8 @@ func main() {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1046,6 +1080,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1124,6 +1160,8 @@ func main() {
     time.Sleep(5 * time.Second) // Wait for potential retries and confirmation
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1214,6 +1252,8 @@ func isRetryableError(err error) bool {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1300,6 +1340,8 @@ func main() {
     select {} // Keep running
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1481,6 +1523,8 @@ err = consumer.Consume(ctx, "orders.processing", func(ctx context.Context, deliv
 })
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1496,6 +1540,8 @@ err = consumer.Consume(ctx, "orders.processing", func(ctx context.Context, deliv
 - **Message Persistence**: Durable message storage surviving broker restarts
 - **Delivery Tracking**: Comprehensive delivery status and retry monitoring
 - **Mandatory Publishing**: Ensures messages reach bound queues
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1556,6 +1602,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1584,6 +1632,8 @@ export RABBITMQ_CONSUMER_MESSAGE_TIMEOUT=10m
 export RABBITMQ_CONSUMER_SHUTDOWN_TIMEOUT=90s
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1596,6 +1646,8 @@ export RABBITMQ_CONSUMER_SHUTDOWN_TIMEOUT=90s
 - **Shutdown Timeouts**: Provide adequate time for graceful resource cleanup
 - **Environment-Specific**: Different timeout values per deployment environment
 - **Monitoring Integration**: Track timeout events for infrastructure optimization
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1703,6 +1755,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -1807,6 +1861,8 @@ func generateLargeDataset(size int) []byte {
     return data
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -1916,6 +1972,8 @@ func generateSensitiveReport(size int) []byte {
     }`, string(make([]byte, size-200)))) // Pad to requested size
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -2082,6 +2140,8 @@ func processPayment(ctx context.Context, orderData []byte) bool {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -2229,6 +2289,8 @@ func getRetryAttempt(delivery *rabbitmq.Delivery) int {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -2242,6 +2304,8 @@ func getRetryAttempt(delivery *rabbitmq.Delivery) int {
 - **Advanced Retry Policies**: Exponential backoff, linear backoff, and custom policies
 - **Circuit Breaker Integration**: Prevent cascade failures in distributed systems
 - **Message Integrity**: Built-in message validation and corruption detection
+
+&nbsp;
 
 🔝 [back to top](#production-features)
 
@@ -2291,6 +2355,8 @@ Essential items for production deployment and operational excellence.
 - Distributed tracing with OpenTelemetry compatibility
 - Advanced security with AES-256-GCM encryption
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -2332,6 +2398,8 @@ Essential items for production deployment and operational excellence.
 - Message compression for large payloads
 - Connection pooling for high-throughput scenarios
 
+&nbsp;
+
 🔝 [back to top](#production-features)
 
 &nbsp;
@@ -2343,5 +2411,7 @@ Essential items for production deployment and operational excellence.
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

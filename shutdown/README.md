@@ -18,6 +18,8 @@ This package provides comprehensive graceful shutdown management for RabbitMQ ap
 - **Structured Logging**: Optional structured logging of shutdown events
 - **Context Support**: Context-aware operations with cancellation support
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -50,6 +52,8 @@ shutdownManager.SetupSignalHandler()
 shutdownManager.Wait()
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -66,6 +70,8 @@ config := shutdown.ShutdownConfig{
 
 shutdownManager := shutdown.NewShutdownManager(config)
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -99,6 +105,8 @@ config.Logger = MyLogger{}
 shutdownManager := shutdown.NewShutdownManager(config)
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -123,6 +131,8 @@ if tracker.Start() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -145,6 +155,8 @@ if err := shutdownManager.WaitWithContext(ctx); err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -159,6 +171,8 @@ if shutdownManager.IsShutdown() {
 
 // Safe to continue with operations
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -209,6 +223,8 @@ func (sc *serverCloser) Close() error {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -228,6 +244,8 @@ func (dc *dbCloser) Close() error {
 // Register database for shutdown
 shutdownManager.Register(&dbCloser{db})
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -280,6 +298,8 @@ func (wp *workerPool) Close() error {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -297,6 +317,8 @@ shutdownManager.Register(messageQueue)  // Depends on database
 shutdownManager.Register(database)      // Independent
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -312,6 +334,8 @@ config := shutdown.ShutdownConfig{
     GracefulDrainTime: time.Minute,      // Drain time
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -329,6 +353,8 @@ if tracker.Start() {
     return processMessage(msg)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -357,6 +383,8 @@ func (rc *resilientCloser) Close() error {
     return nil
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -389,6 +417,8 @@ func TestGracefulShutdown(t *testing.T) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -396,6 +426,8 @@ func TestGracefulShutdown(t *testing.T) {
 ## Error Handling
 
 The shutdown package handles various error scenarios:
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -415,6 +447,8 @@ func (fc *faultyComponent) Close() error {
 manager.Register(&faultyComponent{})
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -430,6 +464,8 @@ config := shutdown.ShutdownConfig{
 manager := shutdown.NewShutdownManager(config)
 // If shutdown takes longer than 5 seconds, it will timeout
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -449,6 +485,8 @@ go func() {
 }()
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -459,6 +497,8 @@ go func() {
 - **Resource Cleanup**: Automatic cleanup of internal resources
 - **Memory Efficiency**: Minimal memory overhead for tracking operations
 - **Signal Handling**: Efficient signal handling with minimal goroutines
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -476,6 +516,8 @@ WARN: Graceful shutdown timeout exceeded
 
 Solution: Increase timeout or optimize component shutdown logic.
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
@@ -487,6 +529,8 @@ if !manager.IsShutdown() {
     manager.Register(component)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -502,11 +546,15 @@ if tracker.Start() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package)
 
 &nbsp;
 
 For more examples and patterns, see the `examples/` directory in the main repository.
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package)
 
@@ -519,5 +567,7 @@ For more examples and patterns, see the `examples/` directory in the main reposi
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

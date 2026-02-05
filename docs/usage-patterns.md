@@ -55,6 +55,8 @@ if err != nil {
 defer consumer.Close()
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -78,6 +80,8 @@ client, err := rabbitmq.NewClient(
 )
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -97,6 +101,8 @@ client, err := rabbitmq.NewClient(
     rabbitmq.WithConnectionName("resilient-app"),
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -138,6 +144,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -167,6 +175,8 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -208,6 +218,8 @@ err = admin.BindQueue(ctx, "user-events", "events", "user.*",
 err = admin.SetupTopology(ctx, exchanges, queues, bindings)
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -245,6 +257,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -269,6 +283,8 @@ err = consumer.Consume(ctx, "orders", handler,
     rabbitmq.WithConsumeRetryPolicy(retryPolicy),
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -316,6 +332,8 @@ if err != nil {
 }
 defer publisher.Close()
 ```
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -367,6 +385,8 @@ func messageHandler(ctx context.Context, delivery *rabbitmq.Delivery) error {
     return delivery.Ack()
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -449,6 +469,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -464,6 +486,8 @@ if err != nil {
 - Use `FromEnvWithPrefix()` for multi-service deployments
 - Single client instance per application with unified configuration
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -474,6 +498,8 @@ if err != nil {
 - Separate topology setup from message operations
 - Use `SetupTopology()` for complete infrastructure-as-code scenarios
 - Declare topology before creating publishers and consumers
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -486,6 +512,8 @@ if err != nil {
 - Use meaningful connection names for monitoring and debugging
 - Implement proper graceful shutdown with timeouts
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -497,6 +525,8 @@ if err != nil {
 - Use proper content types and headers
 - Implement graceful shutdown with timeouts
 - Use batch publishing for high-throughput scenarios
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -511,6 +541,8 @@ if err != nil {
 - Handle context cancellation properly
 - Use reject/requeue patterns for retries
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -522,6 +554,8 @@ if err != nil {
 - Use context for cancellation and timeouts
 - Log connection events for monitoring
 - Use proper error types for different scenarios
+
+&nbsp;
 
 🔝 [back to top](#usage-patterns)
 
@@ -539,6 +573,8 @@ if err != nil {
 8. **Connection Pooling**: Managed automatically by the client
 9. **Resource Cleanup**: Always close publishers, consumers, and clients properly
 
+&nbsp;
+
 🔝 [back to top](#usage-patterns)
 
 &nbsp;
@@ -550,5 +586,7 @@ if err != nil {
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

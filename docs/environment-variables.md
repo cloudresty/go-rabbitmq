@@ -11,12 +11,14 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Core Connection Variables
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_HOSTS` | RabbitMQ host addresses (comma-separated for failover) | `localhost:5672` | `mq1:5672,mq2:5672,mq3:5672` |
 | `RABBITMQ_USERNAME` | Authentication username | `guest` | `myuser` |
 | `RABBITMQ_PASSWORD` | Authentication password | `guest` | `mypassword` |
 | `RABBITMQ_VHOST` | Virtual host | `/` | `/production` |
 | `RABBITMQ_CONNECTION_NAME` | Connection identifier for logging and monitoring | `go-rabbitmq` | `my-service` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -25,10 +27,12 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Protocol and Security Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_PROTOCOL` | Connection protocol (amqp or amqps) | `amqp` | `amqps` |
 | `RABBITMQ_TLS_ENABLED` | Enable TLS/SSL connections | `false` | `true` |
 | `RABBITMQ_TLS_INSECURE` | Skip TLS certificate verification (development only) | `false` | `true` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -37,12 +41,14 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Timeout and Connection Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_DIAL_TIMEOUT` | Connection establishment timeout | `30s` | `60s` |
 | `RABBITMQ_CHANNEL_TIMEOUT` | Channel creation timeout | `10s` | `15s` |
 | `RABBITMQ_HEARTBEAT` | Connection heartbeat interval | `10s` | `30s` |
 | `RABBITMQ_RETRY_ATTEMPTS` | Initial connection retry attempts | `5` | `3` |
 | `RABBITMQ_RETRY_DELAY` | Delay between initial connection retries | `2s` | `5s` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -51,10 +57,12 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Auto-Reconnection Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_AUTO_RECONNECT` | Enable automatic reconnection on connection loss | `true` | `false` |
 | `RABBITMQ_RECONNECT_DELAY` | Delay between reconnection attempts | `5s` | `10s` |
 | `RABBITMQ_MAX_RECONNECT_ATTEMPTS` | Maximum reconnection attempts (0 = unlimited) | `0` | `10` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -63,10 +71,12 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Publisher Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_PUBLISHER_CONFIRMATION_TIMEOUT` | Publisher confirmation timeout | `5s` | `10s` |
 | `RABBITMQ_PUBLISHER_SHUTDOWN_TIMEOUT` | Publisher graceful shutdown timeout | `15s` | `30s` |
 | `RABBITMQ_PUBLISHER_PERSISTENT` | Make messages persistent by default | `true` | `false` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -75,11 +85,13 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Consumer Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_CONSUMER_PREFETCH_COUNT` | Default prefetch count for consumers | `1` | `10` |
 | `RABBITMQ_CONSUMER_AUTO_ACK` | Enable automatic acknowledgment | `false` | `true` |
 | `RABBITMQ_CONSUMER_MESSAGE_TIMEOUT` | Message processing timeout | `5m` | `10m` |
 | `RABBITMQ_CONSUMER_SHUTDOWN_TIMEOUT` | Consumer graceful shutdown timeout | `30s` | `60s` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -88,13 +100,15 @@ The go-rabbitmq package supports comprehensive configuration through environment
 ## Topology Validation and Auto-Healing Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_TOPOLOGY_VALIDATION` | Enable topology validation before operations | `true` | `false` |
 | `RABBITMQ_TOPOLOGY_AUTO_RECREATION` | Auto-recreate missing exchanges, queues, and bindings | `true` | `false` |
 | `RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION` | Enable periodic background topology validation | `true` | `false` |
 | `RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL` | Background validation interval | `30s` | `60s` |
 
 These settings provide enterprise-grade reliability by ensuring your topology remains consistent and is automatically recreated if deleted externally.
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -103,10 +117,12 @@ These settings provide enterprise-grade reliability by ensuring your topology re
 ## HTTP Management API Settings
 
 | Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
+| :--- | :--- | :--- | :--- |
 | `RABBITMQ_HTTP_PROTOCOL` | Management API protocol (http or https) | `http` | `https` |
 | `RABBITMQ_HTTP_HOST` | Management API host | `localhost` | `rabbitmq-mgmt.prod.com` |
 | `RABBITMQ_HTTP_PORT` | Management API port | `15672` | `15671` |
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -132,6 +148,8 @@ client, err := rabbitmq.NewClient(
     rabbitmq.WithConnectionName("priority-service"), // Override connection name
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -166,6 +184,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -191,6 +211,8 @@ defer client.Close()
 // MYAPP_RABBITMQ_PASSWORD
 // etc.
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -261,6 +283,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -323,6 +347,8 @@ func maskPassword(url string) string {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -358,6 +384,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -377,6 +405,8 @@ defer client.Close()
 
 // Now uses MYAPP_RABBITMQ_HOSTS, MYAPP_RABBITMQ_USERNAME, etc.
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -398,6 +428,8 @@ if err != nil {
 defer client.Close()
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -417,6 +449,8 @@ RABBITMQ_CONSUMER_PREFETCH_COUNT=1
 RABBITMQ_PUBLISHER_PERSISTENT=true
 RABBITMQ_AUTO_RECONNECT=true
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -449,6 +483,8 @@ RABBITMQ_TOPOLOGY_BACKGROUND_VALIDATION=true
 RABBITMQ_TOPOLOGY_VALIDATION_INTERVAL=30s
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -469,6 +505,8 @@ RABBITMQ_RECONNECT_DELAY=15s
 RABBITMQ_CONSUMER_PREFETCH_COUNT=50
 RABBITMQ_PUBLISHER_PERSISTENT=true
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -521,6 +559,8 @@ clientA, err := rabbitmq.NewClient(rabbitmq.FromEnvWithPrefix("SERVICE_A_"))
 clientB, err := rabbitmq.NewClient(rabbitmq.FromEnvWithPrefix("SERVICE_B_"))
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -551,6 +591,8 @@ services:
       - "5672:5672"
       - "15672:15672"
 ```
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -601,6 +643,8 @@ spec:
           value: "50"
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -614,6 +658,8 @@ spec:
 3. **Use proper vhosts** - Isolate different environments and services
 4. **Limit connection names** - Use descriptive but not sensitive information
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -624,6 +670,8 @@ spec:
 2. **Set appropriate timeouts** - Balance responsiveness with stability
 3. **Enable auto-reconnect** - Ensure `RABBITMQ_AUTO_RECONNECT=true` in production
 4. **Monitor heartbeats** - Set reasonable heartbeat intervals
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -636,6 +684,8 @@ spec:
 3. **Consider persistence** - Balance durability with performance needs
 4. **Use confirmation timeouts** - Set based on your latency requirements
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -646,6 +696,8 @@ spec:
 2. **Leverage container orchestration** - Kubernetes secrets, Docker Compose
 3. **Document required variables** - Make deployment requirements clear
 4. **Validate configuration** - Test connections in health checks
+
+&nbsp;
 
 🔝 [back to top](#environment-variables)
 
@@ -674,6 +726,8 @@ RABBITMQ_HOSTS=localhost:invalid
 # Error: invalid port in RABBITMQ_HOSTS: strconv.Atoi: parsing "invalid": invalid syntax
 ```
 
+&nbsp;
+
 🔝 [back to top](#environment-variables)
 
 &nbsp;
@@ -685,5 +739,7 @@ RABBITMQ_HOSTS=localhost:invalid
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

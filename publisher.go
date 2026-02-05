@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +18,8 @@ type Publisher struct {
 
 	// Delivery assurance fields
 	deliveryAssuranceEnabled bool
-	confirmChannel           *amqp.Channel              // Dedicated channel for delivery assurance
-	pendingByMessageID       map[string]*pendingMessage // Keyed by MessageID for Return correlation
-	pendingByDeliveryTag     map[uint64]*pendingMessage // Keyed by DeliveryTag for Confirmation correlation
-	pendingMutex             sync.RWMutex
+	confirmChannel           *amqp.Channel      // Dedicated channel for delivery assurance
+	pendingMessages          *shardedPendingMap // Sharded map for pending messages (reduces contention by 32x)
 	confirmChan              chan amqp.Confirmation
 	returnChan               chan amqp.Return
 	shutdownChan             chan struct{}
@@ -76,6 +75,7 @@ type pendingMessage struct {
 
 	// Automatic retry support (only populated if automatic retries are enabled)
 	OriginalMessage *Message        // Cloned message for retry (nil if retries disabled)
+	OriginalContext context.Context // Original context for retry (preserves trace IDs, deadlines)
 	RetryCount      int             // Current retry attempt number
 	RetryOptions    DeliveryOptions // Original delivery options for retry
 
@@ -99,6 +99,38 @@ type PublishRequest struct {
 	Exchange   string
 	RoutingKey string
 	Message    *Message
+}
+
+// PublishResult represents the result of a single publish operation in a batch
+type PublishResult struct {
+	Index   int   // Index of the message in the original batch
+	Success bool  // Whether the publish was successful
+	Error   error // Error if publish failed (nil if successful)
+}
+
+// BatchPublishResult represents the result of a batch publish operation
+type BatchPublishResult struct {
+	TotalMessages int             // Total number of messages in the batch
+	SuccessCount  int             // Number of successfully published messages
+	FailureCount  int             // Number of failed messages
+	Results       []PublishResult // Individual results for each message
+	Duration      time.Duration   // Total time taken for the batch operation
+}
+
+// HasFailures returns true if any messages in the batch failed to publish
+func (r *BatchPublishResult) HasFailures() bool {
+	return r.FailureCount > 0
+}
+
+// FailedMessages returns the indices of messages that failed to publish
+func (r *BatchPublishResult) FailedMessages() []int {
+	failed := make([]int, 0, r.FailureCount)
+	for _, result := range r.Results {
+		if !result.Success {
+			failed = append(failed, result.Index)
+		}
+	}
+	return failed
 }
 
 // Publisher options
@@ -374,28 +406,96 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, me
 	span.SetAttribute("message_id", message.MessageID)
 	span.SetAttribute("confirmation_enabled", p.config.ConfirmationEnabled)
 
-	// Publish message
-	err := p.ch.PublishWithContext(
-		ctx,
-		exchange,
-		routingKey,
-		p.config.Mandatory,
-		p.config.Immediate,
-		publishing,
-	)
+	// Publish message with auto-reconnect retry support
+	var publishErr error
+	maxConnRetries := 3 // Max channel refresh attempts for a single publish
+
+	for attempt := 0; attempt <= maxConnRetries; attempt++ {
+		publishErr = p.ch.PublishWithContext(
+			ctx,
+			exchange,
+			routingKey,
+			p.config.Mandatory,
+			p.config.Immediate,
+			publishing,
+		)
+
+		// Success - message published
+		if publishErr == nil {
+			break
+		}
+
+		// Check if this is a channel/connection error and AutoReconnect is enabled
+		if isChannelError(publishErr) && p.client.config.AutoReconnect {
+			// Check if ReconnectPolicy allows retry
+			if p.client.config.ReconnectPolicy != nil && !p.client.config.ReconnectPolicy.ShouldRetry(attempt+1, publishErr) {
+				p.client.config.Logger.Warn("ReconnectPolicy indicates no more retries",
+					"error", publishErr,
+					"attempt", attempt+1,
+					"message_id", message.MessageID)
+				break
+			}
+
+			p.client.config.Logger.Warn("Publish failed due to channel/connection error, attempting to refresh channel",
+				"error", publishErr,
+				"attempt", attempt+1,
+				"max_attempts", maxConnRetries+1,
+				"message_id", message.MessageID)
+
+			// Check if context is still valid
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			default:
+			}
+
+			// Calculate delay based on ReconnectPolicy if available, otherwise use ReconnectDelay
+			var reconnectDelay time.Duration
+			if p.client.config.ReconnectPolicy != nil {
+				reconnectDelay = p.client.config.ReconnectPolicy.NextDelay(attempt + 1)
+			} else {
+				reconnectDelay = p.client.config.ReconnectDelay
+			}
+			reconnectDelay = max(reconnectDelay, minReconnectDelay)
+
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			case <-time.After(reconnectDelay):
+				// Attempt to refresh the channel
+				if refreshErr := p.refreshChannel(); refreshErr != nil {
+					p.client.config.Logger.Error("Failed to refresh channel",
+						"error", refreshErr,
+						"attempt", attempt+1,
+						"message_id", message.MessageID)
+					continue // Try again if we have retries left
+				}
+
+				p.client.config.Logger.Info("Channel refreshed, retrying publish",
+					"message_id", message.MessageID,
+					"attempt", attempt+2)
+				continue // Retry the publish with the refreshed channel
+			}
+		}
+
+		// Not a channel error or AutoReconnect disabled - don't retry
+		break
+	}
 
 	// Record performance metrics
 	duration := time.Since(start)
-	success := err == nil
+	success := publishErr == nil
 	p.client.config.Metrics.RecordPublish(exchange, routingKey, len(message.Body), duration)
 	if p.client.config.PerformanceMonitor != nil {
 		p.client.config.PerformanceMonitor.RecordPublish(success, duration)
 	}
 
-	if err != nil {
-		p.client.config.Metrics.RecordError("publish", err)
-		span.SetStatus(SpanStatusError, err.Error())
-		return fmt.Errorf("failed to publish message: %w", err)
+	if publishErr != nil {
+		p.client.config.Metrics.RecordError("publish", publishErr)
+		span.SetStatus(SpanStatusError, publishErr.Error())
+		return fmt.Errorf("failed to publish message: %w", publishErr)
 	}
 
 	// Wait for confirmation if publisher is configured for confirmations
@@ -444,6 +544,124 @@ func (p *Publisher) PublishBatch(ctx context.Context, messages []PublishRequest)
 		"batch_size", len(messages))
 
 	return nil
+}
+
+// PublishBatchParallel publishes multiple messages concurrently for higher throughput.
+// Unlike PublishBatch which publishes sequentially and stops on first error,
+// this method publishes all messages in parallel and returns detailed results for each.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - messages: Slice of publish requests to send
+//   - maxConcurrency: Maximum number of concurrent publish operations (0 = unlimited)
+//
+// Returns BatchPublishResult with individual results for each message.
+// This allows partial success handling where some messages succeed and others fail.
+func (p *Publisher) PublishBatchParallel(ctx context.Context, messages []PublishRequest, maxConcurrency int) *BatchPublishResult {
+	start := time.Now()
+	result := &BatchPublishResult{
+		TotalMessages: len(messages),
+		Results:       make([]PublishResult, len(messages)),
+	}
+
+	if len(messages) == 0 {
+		result.Duration = time.Since(start)
+		return result
+	}
+
+	// Start tracing span
+	ctx, span := p.client.config.Tracer.StartSpan(ctx, "rabbitmq.publish_batch_parallel")
+	defer span.End()
+
+	span.SetAttribute("batch_size", len(messages))
+	span.SetAttribute("max_concurrency", maxConcurrency)
+
+	// Use semaphore for concurrency limiting if maxConcurrency > 0
+	var sem chan struct{}
+	if maxConcurrency > 0 {
+		sem = make(chan struct{}, maxConcurrency)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex // Protects result counters
+
+	for i, req := range messages {
+		wg.Add(1)
+
+		go func(index int, request PublishRequest) {
+			defer wg.Done()
+
+			// Acquire semaphore slot if concurrency is limited
+			if sem != nil {
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					mu.Lock()
+					result.Results[index] = PublishResult{
+						Index:   index,
+						Success: false,
+						Error:   ctx.Err(),
+					}
+					result.FailureCount++
+					mu.Unlock()
+					return
+				}
+			}
+
+			// Check context before publishing
+			if ctx.Err() != nil {
+				mu.Lock()
+				result.Results[index] = PublishResult{
+					Index:   index,
+					Success: false,
+					Error:   ctx.Err(),
+				}
+				result.FailureCount++
+				mu.Unlock()
+				return
+			}
+
+			// Publish the message
+			err := p.Publish(ctx, request.Exchange, request.RoutingKey, request.Message)
+
+			mu.Lock()
+			if err != nil {
+				result.Results[index] = PublishResult{
+					Index:   index,
+					Success: false,
+					Error:   err,
+				}
+				result.FailureCount++
+			} else {
+				result.Results[index] = PublishResult{
+					Index:   index,
+					Success: true,
+					Error:   nil,
+				}
+				result.SuccessCount++
+			}
+			mu.Unlock()
+		}(i, req)
+	}
+
+	wg.Wait()
+	result.Duration = time.Since(start)
+
+	// Set span status based on results
+	if result.FailureCount > 0 {
+		span.SetStatus(SpanStatusError, fmt.Sprintf("%d/%d messages failed", result.FailureCount, result.TotalMessages))
+	} else {
+		span.SetStatus(SpanStatusOK, "")
+	}
+
+	p.client.config.Logger.Info("Parallel batch publish completed",
+		"batch_size", len(messages),
+		"success_count", result.SuccessCount,
+		"failure_count", result.FailureCount,
+		"duration", result.Duration)
+
+	return result
 }
 
 // PublishWithDeliveryAssurance publishes a message with delivery assurance tracking.
@@ -564,9 +782,10 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		RetryCount:  0,
 	}
 
-	// If automatic retries are enabled, clone the message for potential retry
+	// If automatic retries are enabled, clone the message and store context for retry
 	if p.config.enableAutomaticRetries {
 		pending.OriginalMessage = message.Clone()
+		pending.OriginalContext = ctx // Preserve context for trace propagation during retry
 		pending.RetryOptions = options
 	}
 
@@ -577,15 +796,10 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 
 	// Add to pending messages before publishing
 	// Check for duplicate MessageID to prevent race conditions
-	p.pendingMutex.Lock()
-	if _, exists := p.pendingByMessageID[messageID]; exists {
-		p.pendingMutex.Unlock()
+	if !p.pendingMessages.Store(messageID, deliveryTag, pending) {
 		return fmt.Errorf("message with ID '%s' is already pending delivery - MessageID must be unique for in-flight messages", messageID)
 	}
-	p.pendingByMessageID[messageID] = pending
-	p.pendingByDeliveryTag[deliveryTag] = pending
-	pendingCount := int64(len(p.pendingByMessageID))
-	p.pendingMutex.Unlock()
+	pendingCount := p.pendingMessages.Count()
 
 	// Update statistics
 	p.statsMutex.Lock()
@@ -604,22 +818,106 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	span.SetAttribute("delivery_assurance", true)
 
 	// Publish message using the dedicated confirmation channel
-	err := p.confirmChannel.PublishWithContext(
-		ctx,
-		exchange,
-		routingKey,
-		mandatory,
-		p.config.Immediate,
-		publishing,
-	)
+	// With auto-reconnect retry support for connection/channel errors
+	var publishErr error
+	maxConnRetries := 3 // Max channel refresh attempts for a single publish
 
-	if err != nil {
+	for attempt := 0; attempt <= maxConnRetries; attempt++ {
+		publishErr = p.confirmChannel.PublishWithContext(
+			ctx,
+			exchange,
+			routingKey,
+			mandatory,
+			p.config.Immediate,
+			publishing,
+		)
+
+		// Success - message published
+		if publishErr == nil {
+			break
+		}
+
+		// Check if this is a channel/connection error and AutoReconnect is enabled
+		if isChannelError(publishErr) && p.client.config.AutoReconnect {
+			// Check if ReconnectPolicy allows retry
+			if p.client.config.ReconnectPolicy != nil && !p.client.config.ReconnectPolicy.ShouldRetry(attempt+1, publishErr) {
+				p.client.config.Logger.Warn("ReconnectPolicy indicates no more retries",
+					"error", publishErr,
+					"attempt", attempt+1,
+					"message_id", messageID)
+				break
+			}
+
+			p.client.config.Logger.Warn("Publish failed due to channel/connection error, attempting to refresh channel",
+				"error", publishErr,
+				"attempt", attempt+1,
+				"max_attempts", maxConnRetries+1,
+				"message_id", messageID)
+
+			// Check if context is still valid before waiting
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			default:
+			}
+
+			// Calculate delay based on ReconnectPolicy if available, otherwise use ReconnectDelay
+			var reconnectDelay time.Duration
+			if p.client.config.ReconnectPolicy != nil {
+				reconnectDelay = p.client.config.ReconnectPolicy.NextDelay(attempt + 1)
+			} else {
+				reconnectDelay = p.client.config.ReconnectDelay
+			}
+			reconnectDelay = max(reconnectDelay, minReconnectDelay)
+
+			select {
+			case <-ctx.Done():
+				publishErr = ctx.Err()
+				break
+			case <-time.After(reconnectDelay):
+				// Attempt to refresh the channel
+				if refreshErr := p.refreshConfirmChannel(); refreshErr != nil {
+					p.client.config.Logger.Error("Failed to refresh confirm channel",
+						"error", refreshErr,
+						"attempt", attempt+1,
+						"message_id", messageID)
+					// Continue to next attempt if we have retries left
+					continue
+				}
+
+				p.client.config.Logger.Info("Confirm channel refreshed, retrying publish",
+					"message_id", messageID,
+					"attempt", attempt+2)
+
+				// Need to re-register the pending message with a new delivery tag
+				// since we have a new channel
+				p.pendingMessages.Delete(messageID, deliveryTag)
+				pending.TimeoutTimer.Stop()
+
+				deliveryTag = p.getNextDeliveryTag()
+				pending.DeliveryTag = deliveryTag
+				pending.TimeoutTimer = time.AfterFunc(timeout, func() {
+					p.handleTimeout(deliveryTag)
+				})
+
+				if !p.pendingMessages.Store(messageID, deliveryTag, pending) {
+					publishErr = fmt.Errorf("message with ID '%s' is already pending delivery after channel refresh", messageID)
+					break
+				}
+
+				continue // Retry the publish with the refreshed channel
+			}
+		}
+
+		// Not a channel error or AutoReconnect disabled - don't retry
+		break
+	}
+
+	if publishErr != nil {
 		// Remove from pending messages on publish error
-		p.pendingMutex.Lock()
-		delete(p.pendingByMessageID, messageID)
-		delete(p.pendingByDeliveryTag, deliveryTag)
-		pendingCount := int64(len(p.pendingByMessageID))
-		p.pendingMutex.Unlock()
+		p.pendingMessages.Delete(messageID, deliveryTag)
+		pendingCount := p.pendingMessages.Count()
 
 		// Stop timeout timer
 		pending.TimeoutTimer.Stop()
@@ -629,9 +927,9 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		p.stats.PendingMessages = pendingCount
 		p.statsMutex.Unlock()
 
-		p.client.config.Metrics.RecordError("publish_with_delivery_assurance", err)
-		span.SetStatus(SpanStatusError, err.Error())
-		return fmt.Errorf("failed to publish message: %w", err)
+		p.client.config.Metrics.RecordError("publish_with_delivery_assurance", publishErr)
+		span.SetStatus(SpanStatusError, publishErr.Error())
+		return fmt.Errorf("failed to publish message: %w", publishErr)
 	}
 
 	span.SetStatus(SpanStatusOK, "")
@@ -655,9 +953,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 func (p *Publisher) Close() error {
 	// Shutdown delivery assurance if enabled
 	if p.deliveryAssuranceEnabled {
-		p.pendingMutex.RLock()
-		pendingCount := len(p.pendingByMessageID)
-		p.pendingMutex.RUnlock()
+		pendingCount := p.pendingMessages.Count()
 
 		p.client.config.Logger.Info("Shutting down delivery assurance",
 			"pending_messages", pendingCount)
@@ -680,14 +976,14 @@ func (p *Publisher) Close() error {
 		}
 
 		// Cancel all pending message timeouts
-		p.pendingMutex.Lock()
-		for _, pending := range p.pendingByMessageID {
+		var finalPendingCount int64
+		p.pendingMessages.Range(func(msgID string, pending *pendingMessage) bool {
 			if pending.TimeoutTimer != nil {
 				pending.TimeoutTimer.Stop()
 			}
-		}
-		finalPendingCount := len(p.pendingByMessageID)
-		p.pendingMutex.Unlock()
+			finalPendingCount++
+			return true
+		})
 
 		if finalPendingCount > 0 {
 			p.client.config.Logger.Warn("Publisher closed with pending messages",
@@ -809,8 +1105,7 @@ func (p *Publisher) initDeliveryAssurance() error {
 	// Initialize publisher fields
 	p.deliveryAssuranceEnabled = true
 	p.confirmChannel = confirmCh
-	p.pendingByMessageID = make(map[string]*pendingMessage)
-	p.pendingByDeliveryTag = make(map[uint64]*pendingMessage)
+	p.pendingMessages = newShardedPendingMap()
 	p.confirmChan = make(chan amqp.Confirmation, 100)
 	p.returnChan = make(chan amqp.Return, 100)
 	p.shutdownChan = make(chan struct{})
@@ -826,6 +1121,100 @@ func (p *Publisher) initDeliveryAssurance() error {
 	go p.processReturns()
 
 	p.client.config.Logger.Info("Delivery assurance initialized",
+		"connection_name", p.client.config.ConnectionName)
+
+	return nil
+}
+
+// refreshConfirmChannel attempts to get a new channel from the client and reinitialize
+// the delivery assurance infrastructure. This is used when AutoReconnect is enabled
+// and the current channel has closed due to a connection error.
+//
+// This method performs a "hot-swap" of the internal channel:
+//  1. Gets a new channel from the client
+//  2. Enables confirm mode on the new channel
+//  3. Sets up new notification channels
+//  4. Resets the delivery tag counter
+//
+// Note: Pending messages from the old channel will timeout normally.
+// The background goroutines (processConfirmations/processReturns) continue running
+// as they receive from channels that are replaced atomically.
+func (p *Publisher) refreshConfirmChannel() error {
+	// Get a new channel from the client
+	newCh, err := p.client.getChannel()
+	if err != nil {
+		return fmt.Errorf("failed to get new channel: %w", err)
+	}
+
+	// Enable confirm mode on the new channel
+	if err := newCh.Confirm(false); err != nil {
+		_ = newCh.Close()
+		return fmt.Errorf("failed to enable confirm mode on new channel: %w", err)
+	}
+
+	// Create new notification channels
+	newConfirmChan := make(chan amqp.Confirmation, 100)
+	newReturnChan := make(chan amqp.Return, 100)
+
+	// Register notification handlers on the new channel
+	newCh.NotifyPublish(newConfirmChan)
+	newCh.NotifyReturn(newReturnChan)
+
+	// Atomically swap the channels
+	// Note: The old confirmChannel will be closed by RabbitMQ when connection drops
+	p.confirmChannel = newCh
+	p.confirmChan = newConfirmChan
+	p.returnChan = newReturnChan
+
+	// Reset delivery tag counter for new channel
+	// Each channel has its own delivery tag sequence starting from 1
+	p.deliveryTagMutex.Lock()
+	p.nextDeliveryTag = 1
+	p.deliveryTagMutex.Unlock()
+
+	p.client.config.Logger.Info("Confirm channel refreshed successfully",
+		"connection_name", p.client.config.ConnectionName)
+
+	return nil
+}
+
+// isChannelError checks if an error indicates the channel or connection is closed
+func isChannelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == amqp.ErrClosed {
+		return true
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "channel/connection is not open") ||
+		strings.Contains(errStr, "channel already closed") ||
+		strings.Contains(errStr, "connection closed")
+}
+
+// refreshChannel attempts to get a new channel for regular (non-delivery-assurance) publishing.
+// This is used when AutoReconnect is enabled and the current channel has closed.
+func (p *Publisher) refreshChannel() error {
+	// Get a new channel from the client
+	newCh, err := p.client.getChannel()
+	if err != nil {
+		return fmt.Errorf("failed to get new channel: %w", err)
+	}
+
+	// Enable confirmation mode if it was enabled on the old channel
+	if p.config.ConfirmationEnabled {
+		if err := newCh.Confirm(false); err != nil {
+			_ = newCh.Close()
+			return fmt.Errorf("failed to enable confirm mode on new channel: %w", err)
+		}
+		// Set up new confirmation channel
+		p.config.confirmations = newCh.NotifyPublish(make(chan amqp.Confirmation, 100))
+	}
+
+	// Swap the channel
+	p.ch = newCh
+
+	p.client.config.Logger.Info("Publisher channel refreshed successfully",
 		"connection_name", p.client.config.ConnectionName)
 
 	return nil
@@ -871,10 +1260,8 @@ func (p *Publisher) processReturns() {
 
 // handleConfirmation processes a single confirmation
 func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
-	// Get the pending message (with global lock)
-	p.pendingMutex.RLock()
-	pending, exists := p.pendingByDeliveryTag[confirmation.DeliveryTag]
-	p.pendingMutex.RUnlock()
+	// Get the pending message using sharded map
+	pending, exists := p.pendingMessages.LoadByDeliveryTag(confirmation.DeliveryTag)
 
 	if !exists {
 		return
@@ -916,11 +1303,9 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 		"exchange", ret.Exchange,
 		"routing_key", ret.RoutingKey)
 
-	// Find the message by MessageID (with global lock)
-	p.pendingMutex.RLock()
-	pending, exists := p.pendingByMessageID[messageID]
-	pendingCount := len(p.pendingByMessageID)
-	p.pendingMutex.RUnlock()
+	// Find the message by MessageID using sharded map
+	pending, exists := p.pendingMessages.LoadByMessageID(messageID)
+	pendingCount := p.pendingMessages.Count()
 
 	if !exists || pending == nil {
 		// Message not found - may have already been finalized or timed out
@@ -1093,11 +1478,8 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 		}
 
 		// Remove from pending messages after callback is done
-		p.pendingMutex.Lock()
-		delete(p.pendingByMessageID, messageID)
-		delete(p.pendingByDeliveryTag, deliveryTag)
-		pendingCount := int64(len(p.pendingByMessageID))
-		p.pendingMutex.Unlock()
+		p.pendingMessages.Delete(messageID, deliveryTag)
+		pendingCount := p.pendingMessages.Count()
 
 		// Update pending count in stats
 		p.statsMutex.Lock()
@@ -1145,11 +1527,8 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 		}
 
 		// Remove from pending messages
-		p.pendingMutex.Lock()
-		delete(p.pendingByMessageID, messageID)
-		delete(p.pendingByDeliveryTag, deliveryTag)
-		pendingCount := int64(len(p.pendingByMessageID))
-		p.pendingMutex.Unlock()
+		p.pendingMessages.Delete(messageID, deliveryTag)
+		pendingCount := p.pendingMessages.Count()
 
 		// Update stats
 		p.statsMutex.Lock()
@@ -1162,6 +1541,7 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 	// We have retries left - prepare to re-publish
 	// Copy all data needed for re-publishing while holding the lock
 	originalMessage := pending.OriginalMessage
+	originalCtx := pending.OriginalContext
 	exchange := pending.Exchange
 	routingKey := pending.RoutingKey
 	options := pending.RetryOptions
@@ -1179,14 +1559,14 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 
 	// Clean up the old pending entry before re-publishing
 	// The re-publish will create a new entry with a new delivery tag
-	p.pendingMutex.Lock()
-	delete(p.pendingByMessageID, messageID)
-	delete(p.pendingByDeliveryTag, oldDeliveryTag)
-	p.pendingMutex.Unlock()
+	p.pendingMessages.Delete(messageID, oldDeliveryTag)
 
-	// Re-publish the message
+	// Re-publish the message using the original context to preserve trace propagation
 	// This creates a new pending entry with a new delivery tag
-	ctx := context.Background()
+	ctx := originalCtx
+	if ctx == nil {
+		ctx = context.Background() // Fallback if no context was stored
+	}
 	err := p.PublishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options)
 
 	if err != nil {
@@ -1210,10 +1590,8 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 // handleMandatoryGracePeriodExpired is called when the grace period for a mandatory message expires
 // This means the message was confirmed but no return was received, so it was successfully routed
 func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
-	// Get the pending message (with global lock)
-	p.pendingMutex.RLock()
-	pending, exists := p.pendingByDeliveryTag[deliveryTag]
-	p.pendingMutex.RUnlock()
+	// Get the pending message using sharded map
+	pending, exists := p.pendingMessages.LoadByDeliveryTag(deliveryTag)
 
 	if !exists {
 		return
@@ -1276,11 +1654,8 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 		}
 
 		// Remove from pending messages after callback is done
-		p.pendingMutex.Lock()
-		delete(p.pendingByMessageID, messageID)
-		delete(p.pendingByDeliveryTag, deliveryTag)
-		pendingCount := int64(len(p.pendingByMessageID))
-		p.pendingMutex.Unlock()
+		p.pendingMessages.Delete(messageID, deliveryTag)
+		pendingCount := p.pendingMessages.Count()
 
 		// Update pending count in stats
 		p.statsMutex.Lock()
@@ -1293,10 +1668,8 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 
 // handleTimeout is called when a message delivery times out
 func (p *Publisher) handleTimeout(deliveryTag uint64) {
-	// Get the pending message (with global lock)
-	p.pendingMutex.RLock()
-	pending, exists := p.pendingByDeliveryTag[deliveryTag]
-	p.pendingMutex.RUnlock()
+	// Get the pending message using sharded map
+	pending, exists := p.pendingMessages.LoadByDeliveryTag(deliveryTag)
 
 	if !exists {
 		return
@@ -1346,11 +1719,8 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 			"timeout", timeout)
 
 		// Remove from pending messages after callback is done
-		p.pendingMutex.Lock()
-		delete(p.pendingByMessageID, messageID)
-		delete(p.pendingByDeliveryTag, deliveryTag)
-		pendingCount := int64(len(p.pendingByMessageID))
-		p.pendingMutex.Unlock()
+		p.pendingMessages.Delete(messageID, deliveryTag)
+		pendingCount := p.pendingMessages.Count()
 
 		// Update pending count in stats
 		p.statsMutex.Lock()

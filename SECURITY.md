@@ -17,6 +17,8 @@ We take the security of go-rabbitmq seriously. This document outlines our securi
 - [Security Updates](#security-updates)
 - [Dependencies](#dependencies)
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -25,11 +27,13 @@ We take the security of go-rabbitmq seriously. This document outlines our securi
 
 We provide security updates for the following versions:
 
-| Version | Supported          |
-| ------- | ------------------ |
-| Latest  | ✅ Yes            |
+| Version | Supported |
+| :--- | :--- |
+| Latest | ✅ Yes |
 | Previous Major | ✅ Yes (6 months) |
-| Older Versions | ❌ No            |
+| Older Versions | ❌ No |
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -40,6 +44,8 @@ We provide security updates for the following versions:
 - **Latest Release**: Always supported with security updates
 - **Previous Major Version**: Supported for 6 months after new major release
 - **Development Branches**: Not supported for security updates
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -59,6 +65,8 @@ We provide security updates for the following versions:
 2. **Subject**: Include "SECURITY" and brief description
 3. **Encryption**: Use our PGP key for sensitive information (see below)
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -72,6 +80,8 @@ We provide security updates for the following versions:
 - **Environment**: Go version, OS, RabbitMQ version
 - **Proof of Concept**: Code example (if applicable)
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -82,6 +92,8 @@ We provide security updates for the following versions:
 - **Vulnerability Assessment**: Within 5 business days
 - **Fix Development**: Timeline depends on severity
 - **Public Disclosure**: After fix is available and users have time to update
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -96,6 +108,8 @@ We provide security updates for the following versions:
 ```
 
 Download: [security@cloudresty.com.asc](mailto:security@cloudresty.com)
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -125,6 +139,8 @@ export RABBITMQ_USERNAME=guest
 export RABBITMQ_PASSWORD=guest
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -152,6 +168,8 @@ config := rabbitmq.ConnectionConfig{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -167,6 +185,8 @@ config := rabbitmq.ConnectionConfig{
 - Regularly rotate credentials
 - Use strong, unique passwords
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -181,6 +201,8 @@ rabbitmqctl set_permissions -p /myapp myapp_user ".*" ".*" ".*"
 # Remove default guest user in production
 rabbitmqctl delete_user guest
 ```
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -199,6 +221,8 @@ rabbitmqctl delete_user guest
 # Only from trusted networks
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -209,6 +233,8 @@ rabbitmqctl delete_user guest
 - Use VPC endpoints where available
 - Implement network segmentation
 - Monitor network traffic
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -232,6 +258,8 @@ message := rabbitmq.NewMessage(encryptedData).
     WithHeader("encrypted", true).
     WithHeader("algorithm", "AES-256-GCM")
 ```
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -261,6 +289,8 @@ func publishSecureMessage(publisher *rabbitmq.Publisher, data []byte) error {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -278,6 +308,8 @@ The package automatically sanitizes sensitive information in logs:
 emit.Info.StructuredFields("Connecting to RabbitMQ",
     emit.ZString("url", sanitizeURL(connectionURL))) // Passwords removed
 ```
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -300,6 +332,8 @@ func sanitizeUserID(userID string) string {
     return userID[:4] + "***"
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -331,6 +365,8 @@ config := rabbitmq.PublishConfig{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -351,6 +387,8 @@ config := rabbitmq.ConnectionConfig{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -361,6 +399,8 @@ config := rabbitmq.ConnectionConfig{
 - Implement appropriate access controls for DLQs
 - Consider data retention policies for failed messages
 - Monitor DLQ contents for security issues
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -374,6 +414,8 @@ ULIDs are designed to be safe for use as public identifiers:
 - **Collision resistant**: Cryptographically secure randomness
 - **Time-based**: Only timestamp is extractable (no other metadata)
 - **URL safe**: No encoding issues or injection risks
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -392,6 +434,8 @@ ULIDs are designed to be safe for use as public identifiers:
 5. **Release**: Coordinated disclosure and patch release
 6. **Notification**: Security advisory and user notification
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -399,11 +443,13 @@ ULIDs are designed to be safe for use as public identifiers:
 ### Severity Levels
 
 | Severity | Description | Response Time |
-|----------|-------------|---------------|
+| :--- | :--- | :--- |
 | **Critical** | Immediate exploitation possible | 24-48 hours |
 | **High** | Significant security risk | 1 week |
 | **Medium** | Moderate security impact | 2 weeks |
 | **Low** | Minor security consideration | Next release |
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -417,6 +463,8 @@ Security updates are published through:
 - **Release Notes**: Detailed in version release notes
 - **Mailing List**: [security-announce@cloudresty.com](mailto:security-announce@cloudresty.com)
 - **Documentation**: Updated security documentation
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -435,6 +483,8 @@ We regularly audit and update dependencies:
 - **Vulnerability Monitoring**: Continuous monitoring for known CVEs
 - **Minimal Dependencies**: We keep dependencies minimal to reduce attack surface
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -449,6 +499,8 @@ github.com/cloudresty/emit      # Structured logging
 github.com/cloudresty/ulid      # ULID generation
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -459,6 +511,8 @@ github.com/cloudresty/ulid      # ULID generation
 - **Major Updates**: Evaluated for security improvements
 - **New Dependencies**: Security review required
 - **Deprecated Dependencies**: Replaced promptly
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -477,6 +531,8 @@ This package is designed to support:
 - **HIPAA**: Encryption and audit trail capabilities
 - **PCI DSS**: Secure communication and data handling
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -494,6 +550,8 @@ The package provides comprehensive audit capabilities:
 {"timestamp": "2024-01-01T12:00:00Z", "level": "info", "message": "Message published", "exchange": "orders", "routing_key": "order.created", "message_id": "01HQRS..."}
 ```
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -508,6 +566,8 @@ The package provides comprehensive audit capabilities:
 - **Response Time**: 48 hours for initial response
 - **Office Hours**: Monday-Friday, 9 AM - 5 PM UTC
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -520,6 +580,8 @@ We welcome responsible disclosure from security researchers:
 - **Hall of Fame**: Public recognition for security contributors
 - **Coordination**: We work with researchers on responsible disclosure
 
+&nbsp;
+
 🔝 [back to top](#security-policy)
 
 &nbsp;
@@ -529,6 +591,8 @@ We welcome responsible disclosure from security researchers:
 ## Acknowledgments
 
 We thank the security community and all researchers who have contributed to making go-rabbitmq more secure.
+
+&nbsp;
 
 🔝 [back to top](#security-policy)
 
@@ -541,5 +605,7 @@ We thank the security community and all researchers who have contributed to maki
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

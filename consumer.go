@@ -3,11 +3,63 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/cloudresty/ulid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// minReconnectDelay is the minimum delay between reconnection attempts
+// to prevent busy loops if ReconnectDelay is set to 0 or very low values
+const minReconnectDelay = 100 * time.Millisecond
+
+// GenerateConsumerTag creates a unique consumer tag using Hostname + ULID.
+// The format is: <sanitized-hostname>-<ulid>
+//
+// This provides:
+//   - Traceability: Hostname identifies which Pod/VM/machine the consumer is running on
+//   - Uniqueness: ULID ensures global uniqueness
+//   - Sortability: ULIDs are lexicographically sortable, so newer consumers sort after older ones
+//
+// Example: "web-server-01-01ARZ3NDEKTSV4RRFFQ69G5FAV"
+func GenerateConsumerTag() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+	// Sanitize hostname for RabbitMQ compatibility
+	hostname = sanitizeHostname(hostname)
+
+	// Generate ULID for uniqueness and sortability
+	ulidStr, err := ulid.New()
+	if err != nil {
+		// Fallback to timestamp if ULID generation fails
+		return fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano())
+	}
+
+	return fmt.Sprintf("%s-%s", hostname, ulidStr)
+}
+
+// sanitizeHostname removes or replaces characters that might be invalid in AMQP consumer tags.
+// RabbitMQ is generally permissive, but we ensure only alphanumeric, dash, underscore, and dot.
+func sanitizeHostname(hostname string) string {
+	result := make([]byte, 0, len(hostname))
+	for _, r := range hostname {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			result = append(result, byte(r))
+		} else {
+			result = append(result, '-')
+		}
+	}
+	// Truncate to reasonable length (keep first 50 chars to leave room for ULID)
+	if len(result) > 50 {
+		result = result[:50]
+	}
+	return string(result)
+}
 
 // Consumer handles message consumption operations
 type Consumer struct {
@@ -42,6 +94,10 @@ type consumerConfig struct {
 	// Retry configuration
 	MaxRetries   int
 	RetryBackoff time.Duration
+
+	// Channel-per-worker mode: each worker gets its own channel
+	// This provides better isolation - if one channel fails, only that worker is affected
+	ChannelPerWorker bool
 }
 
 // ConsumerOption represents a functional option for consumer configuration
@@ -60,12 +116,33 @@ type consumeConfig struct {
 // MessageHandler is the function signature for handling consumed messages
 type MessageHandler func(ctx context.Context, delivery *Delivery) error
 
+// BatchMessageHandler is the function signature for handling batches of messages
+// It receives a slice of deliveries and should return a slice of errors (one per message)
+// A nil error at index i means message i was processed successfully
+type BatchMessageHandler func(ctx context.Context, deliveries []*Delivery) []error
+
 // Delivery wraps amqp.Delivery with additional helper methods
 type Delivery struct {
 	amqp.Delivery
 
 	// Additional metadata
 	ReceivedAt time.Time
+}
+
+// BatchConsumeConfig holds configuration for batch consumption
+type BatchConsumeConfig struct {
+	BatchSize    int           // Maximum number of messages per batch
+	BatchTimeout time.Duration // Maximum time to wait for a full batch
+	AutoAck      bool          // Whether to auto-ack messages after successful batch processing
+}
+
+// DefaultBatchConsumeConfig returns sensible defaults for batch consumption
+func DefaultBatchConsumeConfig() BatchConsumeConfig {
+	return BatchConsumeConfig{
+		BatchSize:    100,
+		BatchTimeout: 5 * time.Second,
+		AutoAck:      false,
+	}
 }
 
 // DeadLetterPolicy defines what to do with messages after retries are exhausted
@@ -142,6 +219,27 @@ func WithMessageTimeout(timeout time.Duration) ConsumerOption {
 func WithConcurrency(workers int) ConsumerOption {
 	return func(config *consumerConfig) {
 		config.Concurrency = workers
+	}
+}
+
+// WithChannelPerWorker enables channel-per-worker mode where each worker gets its own
+// dedicated AMQP channel. This provides better isolation and fault tolerance:
+//
+//   - If one channel fails, only that worker is affected (not all workers)
+//   - Each worker can independently reconnect its channel
+//   - Better parallelism as channels are not shared
+//
+// Trade-offs:
+//   - Uses more resources (one channel per worker instead of one shared channel)
+//   - Slightly higher connection overhead
+//
+// Recommended for:
+//   - High-throughput scenarios with many workers
+//   - When fault isolation is critical
+//   - Long-running consumers where channel stability matters
+func WithChannelPerWorker() ConsumerOption {
+	return func(config *consumerConfig) {
+		config.ChannelPerWorker = true
 	}
 }
 
@@ -256,6 +354,17 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHan
 
 // consumeWithReconnection handles consuming with automatic reconnection
 func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, handler MessageHandler, config *consumeConfig, span Span) error {
+	// Use channel-per-worker mode if enabled
+	if c.config.ChannelPerWorker {
+		return c.consumeWithChannelPerWorker(ctx, queue, handler, config, span)
+	}
+
+	// Default: shared channel mode
+	return c.consumeWithSharedChannel(ctx, queue, handler, config, span)
+}
+
+// consumeWithSharedChannel implements the traditional shared-channel consumption mode
+func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, handler MessageHandler, config *consumeConfig, span Span) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -270,11 +379,12 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 				"queue", queue,
 				"error", err.Error())
 
-			// Wait before retrying
+			// Wait before retrying (enforce minimum to prevent busy loops)
+			reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(c.client.config.ReconnectDelay):
+			case <-time.After(reconnectDelay):
 				continue
 			}
 		}
@@ -294,12 +404,13 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 				"queue", queue,
 				"error", err.Error())
 
-			// Wait before retrying
+			// Wait before retrying (enforce minimum to prevent busy loops)
+			reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
 			select {
 			case <-ctx.Done():
 				span.SetStatus(SpanStatusError, err.Error())
 				return ctx.Err()
-			case <-time.After(c.client.config.ReconnectDelay):
+			case <-time.After(reconnectDelay):
 				continue
 			}
 		}
@@ -347,6 +458,44 @@ func (c *Consumer) consumeWithReconnection(ctx context.Context, queue string, ha
 			c.wg.Wait()
 			// Continue the loop to reconnect
 		}
+	}
+}
+
+// consumeWithChannelPerWorker implements channel-per-worker mode where each worker
+// gets its own dedicated AMQP channel for better isolation and fault tolerance.
+func (c *Consumer) consumeWithChannelPerWorker(ctx context.Context, queue string, handler MessageHandler, config *consumeConfig, span Span) error {
+	c.client.config.Logger.Info("Starting consumption with channel-per-worker mode",
+		"queue", queue,
+		"concurrency", c.config.Concurrency)
+
+	// Reset stop channel
+	c.stopCh = make(chan struct{})
+	c.stopOnce = sync.Once{}
+
+	// Start workers, each with its own channel
+	for i := 0; i < c.config.Concurrency; i++ {
+		c.wg.Add(1)
+		workerID := i
+		go c.workerWithOwnChannel(ctx, queue, handler, config, workerID)
+	}
+
+	// Wait for context cancellation or stop signal
+	select {
+	case <-ctx.Done():
+		c.client.config.Logger.Info("Consumption stopped due to context cancellation",
+			"queue", queue)
+		span.SetStatus(SpanStatusOK, "context cancelled")
+		c.stopOnce.Do(func() {
+			close(c.stopCh)
+		})
+		c.wg.Wait()
+		return ctx.Err()
+	case <-c.stopCh:
+		c.client.config.Logger.Info("Consumption stopped due to stop signal",
+			"queue", queue)
+		span.SetStatus(SpanStatusOK, "stopped")
+		c.wg.Wait()
+		return nil
 	}
 }
 
@@ -403,6 +552,144 @@ func (c *Consumer) workerWithReconnection(ctx context.Context, queue string, han
 				return
 			}
 
+			c.processMessage(ctx, queue, handler, &delivery, config)
+		}
+	}
+}
+
+// workerWithOwnChannel is a worker that manages its own dedicated AMQP channel.
+// This provides better isolation - if this worker's channel fails, other workers continue.
+// The worker handles its own reconnection independently.
+func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handler MessageHandler, config *consumeConfig, workerID int) {
+	defer c.wg.Done()
+
+	// Generate unique consumer tag for this worker
+	consumerTag := c.config.ConsumerTag
+	if consumerTag != "" {
+		consumerTag = fmt.Sprintf("%s-worker-%d", consumerTag, workerID)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.stopCh:
+			return
+		default:
+		}
+
+		// Create a dedicated channel for this worker
+		ch, err := c.client.getChannel()
+		if err != nil {
+			c.client.config.Logger.Error("Worker failed to get channel, retrying...",
+				"queue", queue,
+				"worker_id", workerID,
+				"error", err.Error())
+
+			reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-time.After(reconnectDelay):
+				continue
+			}
+		}
+
+		// Set QoS on this worker's channel
+		if c.config.PrefetchCount > 0 || c.config.PrefetchSize > 0 {
+			if err := ch.Qos(c.config.PrefetchCount, c.config.PrefetchSize, false); err != nil {
+				c.client.config.Logger.Error("Worker failed to set QoS, retrying...",
+					"queue", queue,
+					"worker_id", workerID,
+					"error", err.Error())
+				_ = ch.Close()
+
+				reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
+				select {
+				case <-ctx.Done():
+					return
+				case <-c.stopCh:
+					return
+				case <-time.After(reconnectDelay):
+					continue
+				}
+			}
+		}
+
+		// Start consuming on this worker's channel
+		deliveries, err := ch.Consume(
+			queue,
+			consumerTag,
+			c.config.AutoAck,
+			c.config.Exclusive,
+			c.config.NoLocal,
+			c.config.NoWait,
+			nil,
+		)
+		if err != nil {
+			c.client.config.Logger.Error("Worker failed to start consuming, retrying...",
+				"queue", queue,
+				"worker_id", workerID,
+				"error", err.Error())
+			_ = ch.Close()
+
+			reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-time.After(reconnectDelay):
+				continue
+			}
+		}
+
+		c.client.config.Logger.Debug("Worker started with dedicated channel",
+			"queue", queue,
+			"worker_id", workerID,
+			"consumer_tag", consumerTag)
+
+		// Process messages until channel closes or stop signal
+		channelOK := c.processDeliveriesWithOwnChannel(ctx, queue, handler, deliveries, config, workerID)
+
+		// Clean up channel
+		_ = ch.Close()
+
+		if !channelOK {
+			// Channel closed unexpectedly, reconnect
+			c.client.config.Logger.Warn("Worker channel closed, reconnecting...",
+				"queue", queue,
+				"worker_id", workerID)
+
+			reconnectDelay := max(c.client.config.ReconnectDelay, minReconnectDelay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-time.After(reconnectDelay):
+				continue
+			}
+		}
+	}
+}
+
+// processDeliveriesWithOwnChannel processes deliveries for a worker with its own channel.
+// Returns true if stopped gracefully, false if channel closed unexpectedly.
+func (c *Consumer) processDeliveriesWithOwnChannel(ctx context.Context, queue string, handler MessageHandler, deliveries <-chan amqp.Delivery, config *consumeConfig, workerID int) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return true
+		case <-c.stopCh:
+			return true
+		case delivery, ok := <-deliveries:
+			if !ok {
+				// Channel closed
+				return false
+			}
 			c.processMessage(ctx, queue, handler, &delivery, config)
 		}
 	}
@@ -844,4 +1131,292 @@ func (c *Consumer) applyDecompression(delivery *Delivery) error {
 	delete(delivery.Headers, "x-compression")
 
 	return nil
+}
+
+// ConsumeBatch consumes messages in batches from the specified queue.
+// This is useful for batch processing scenarios where processing multiple messages
+// together is more efficient than processing them one by one.
+//
+// The handler receives batches of messages and should return a slice of errors
+// (one per message). A nil error at index i means message i was processed successfully.
+//
+// Messages are acknowledged individually based on the error returned for each:
+//   - nil error: message is acknowledged
+//   - non-nil error: message is rejected (requeued based on RejectRequeue config)
+//
+// The method blocks until the context is cancelled or Stop() is called.
+func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler BatchMessageHandler, config BatchConsumeConfig, opts ...ConsumeOption) error {
+	// Validate configuration
+	if config.BatchSize <= 0 {
+		config.BatchSize = 100
+	}
+	if config.BatchTimeout <= 0 {
+		config.BatchTimeout = 5 * time.Second
+	}
+
+	// Apply consume options
+	consumeConfig := &consumeConfig{
+		RejectRequeue: true, // Default to requeue on failure
+	}
+	for _, opt := range opts {
+		opt(consumeConfig)
+	}
+
+	c.mu.Lock()
+	if c.consuming {
+		c.mu.Unlock()
+		return fmt.Errorf("consumer is already consuming")
+	}
+	c.consuming = true
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		c.consuming = false
+		c.mu.Unlock()
+	}()
+
+	// Start tracing span
+	ctx, span := c.client.config.Tracer.StartSpan(ctx, "rabbitmq.consume_batch")
+	defer span.End()
+
+	span.SetAttribute("queue", queue)
+	span.SetAttribute("batch_size", config.BatchSize)
+	span.SetAttribute("batch_timeout", config.BatchTimeout.String())
+
+	// Get channel
+	ch, err := c.client.getChannel()
+	if err != nil {
+		span.SetStatus(SpanStatusError, err.Error())
+		return fmt.Errorf("failed to get channel: %w", err)
+	}
+
+	// Set QoS - prefetch enough for batch processing
+	prefetchCount := config.BatchSize
+	if c.config.PrefetchCount > 0 && c.config.PrefetchCount > prefetchCount {
+		prefetchCount = c.config.PrefetchCount
+	}
+	if err := ch.Qos(prefetchCount, c.config.PrefetchSize, false); err != nil {
+		span.SetStatus(SpanStatusError, err.Error())
+		return fmt.Errorf("failed to set QoS: %w", err)
+	}
+
+	// Start consuming
+	deliveries, err := ch.Consume(
+		queue,
+		c.config.ConsumerTag,
+		config.AutoAck,
+		c.config.Exclusive,
+		c.config.NoLocal,
+		c.config.NoWait,
+		nil,
+	)
+	if err != nil {
+		span.SetStatus(SpanStatusError, err.Error())
+		return fmt.Errorf("failed to start consuming: %w", err)
+	}
+
+	c.client.config.Logger.Info("Started batch consumption",
+		"queue", queue,
+		"batch_size", config.BatchSize,
+		"batch_timeout", config.BatchTimeout)
+
+	// Process messages in batches
+	batch := make([]*Delivery, 0, config.BatchSize)
+	batchTimer := time.NewTimer(config.BatchTimeout)
+	defer batchTimer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Process remaining batch before exiting
+			if len(batch) > 0 {
+				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
+			}
+			span.SetStatus(SpanStatusOK, "context cancelled")
+			return ctx.Err()
+
+		case <-c.stopCh:
+			// Process remaining batch before exiting
+			if len(batch) > 0 {
+				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
+			}
+			span.SetStatus(SpanStatusOK, "stopped")
+			return nil
+
+		case delivery, ok := <-deliveries:
+			if !ok {
+				// Channel closed, process remaining batch
+				if len(batch) > 0 {
+					c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
+				}
+				span.SetStatus(SpanStatusError, "delivery channel closed")
+				return fmt.Errorf("delivery channel closed")
+			}
+
+			// Create enhanced delivery
+			enhancedDelivery := &Delivery{
+				Delivery:   delivery,
+				ReceivedAt: time.Now(),
+			}
+
+			// Apply decompression if configured
+			if c.config.Compressor != nil {
+				if err := c.applyDecompression(enhancedDelivery); err != nil {
+					c.client.config.Logger.Error("Failed to decompress message in batch",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+					// Reject this message and continue
+					if !config.AutoAck {
+						_ = delivery.Reject(consumeConfig.RejectRequeue)
+					}
+					continue
+				}
+			}
+
+			// Apply decryption if configured
+			if c.config.Encryptor != nil {
+				if err := c.applyDecryption(enhancedDelivery); err != nil {
+					c.client.config.Logger.Error("Failed to decrypt message in batch",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+					// Reject this message and continue
+					if !config.AutoAck {
+						_ = delivery.Reject(consumeConfig.RejectRequeue)
+					}
+					continue
+				}
+			}
+
+			batch = append(batch, enhancedDelivery)
+
+			// Process batch if full
+			if len(batch) >= config.BatchSize {
+				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
+				batch = make([]*Delivery, 0, config.BatchSize)
+				batchTimer.Reset(config.BatchTimeout)
+			}
+
+		case <-batchTimer.C:
+			// Timeout reached, process current batch even if not full
+			if len(batch) > 0 {
+				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
+				batch = make([]*Delivery, 0, config.BatchSize)
+			}
+			batchTimer.Reset(config.BatchTimeout)
+		}
+	}
+}
+
+// processBatch processes a batch of messages and handles acknowledgments
+func (c *Consumer) processBatch(ctx context.Context, queue string, handler BatchMessageHandler, batch []*Delivery, config *consumeConfig, autoAck bool) {
+	if len(batch) == 0 {
+		return
+	}
+
+	start := time.Now()
+
+	// Start tracing span for batch processing
+	ctx, span := c.client.config.Tracer.StartSpan(ctx, "rabbitmq.process_batch")
+	defer span.End()
+
+	span.SetAttribute("queue", queue)
+	span.SetAttribute("batch_size", len(batch))
+
+	// Call the batch handler with panic recovery
+	var errors []error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				c.client.config.Logger.Error("Batch handler panicked",
+					"queue", queue,
+					"batch_size", len(batch),
+					"panic", fmt.Sprintf("%v", r))
+				// Mark all messages as failed
+				errors = make([]error, len(batch))
+				for i := range errors {
+					errors[i] = fmt.Errorf("handler panicked: %v", r)
+				}
+			}
+		}()
+		errors = handler(ctx, batch)
+	}()
+
+	// Ensure errors slice has correct length
+	if len(errors) != len(batch) {
+		c.client.config.Logger.Warn("Batch handler returned wrong number of errors",
+			"expected", len(batch),
+			"got", len(errors))
+		// Pad or truncate errors slice
+		if len(errors) < len(batch) {
+			padded := make([]error, len(batch))
+			copy(padded, errors)
+			errors = padded
+		} else {
+			errors = errors[:len(batch)]
+		}
+	}
+
+	// Handle acknowledgments for each message
+	successCount := 0
+	failureCount := 0
+
+	if !autoAck {
+		for i, delivery := range batch {
+			if errors[i] == nil {
+				// Success - acknowledge
+				if err := delivery.Ack(); err != nil {
+					c.client.config.Logger.Error("Failed to acknowledge message in batch",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+				}
+				successCount++
+			} else {
+				// Failure - reject
+				if err := delivery.Reject(config.RejectRequeue); err != nil {
+					c.client.config.Logger.Error("Failed to reject message in batch",
+						"queue", queue,
+						"message_id", delivery.MessageId,
+						"error", err.Error())
+				}
+				failureCount++
+			}
+		}
+	} else {
+		// Count successes/failures for logging
+		for _, err := range errors {
+			if err == nil {
+				successCount++
+			} else {
+				failureCount++
+			}
+		}
+	}
+
+	duration := time.Since(start)
+
+	// Record metrics - use existing RecordMessageProcessed for each message in the batch
+	for i, delivery := range batch {
+		c.client.config.Metrics.RecordMessageProcessed(queue, errors[i] == nil, duration/time.Duration(len(batch)))
+		if errors[i] == nil {
+			c.client.config.Metrics.RecordConsume(queue, len(delivery.Body), duration/time.Duration(len(batch)))
+		}
+	}
+
+	// Set span status
+	if failureCount > 0 {
+		span.SetStatus(SpanStatusError, fmt.Sprintf("%d/%d messages failed", failureCount, len(batch)))
+	} else {
+		span.SetStatus(SpanStatusOK, "")
+	}
+
+	c.client.config.Logger.Debug("Batch processed",
+		"queue", queue,
+		"batch_size", len(batch),
+		"success_count", successCount,
+		"failure_count", failureCount,
+		"duration", duration)
 }

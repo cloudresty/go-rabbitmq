@@ -20,6 +20,8 @@ The `saga` package provides distributed transaction support using the Saga patte
 - **Error Handling** - Comprehensive error tracking, recovery, and compensation triggers
 - **Production Ready** - Designed for high-concurrency production workloads
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -156,6 +158,8 @@ func main() {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -311,6 +315,8 @@ func refundPaymentHandler(ctx context.Context, s *saga.Saga, step *saga.Step) er
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -330,6 +336,8 @@ go func() {
 }()
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -342,6 +350,8 @@ go func() {
 4. **Flow Control**: Automatically publishes the next step message when a step completes
 5. **Error Handling**: Triggers compensation when steps fail
 6. **Concurrency Safety**: Uses atomic operations to prevent race conditions
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -363,6 +373,8 @@ type Store interface {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -373,6 +385,8 @@ type Store interface {
 - **Consistency**: Guarantees that state changes are atomic and consistent
 - **Performance**: Eliminates the need for load-modify-save patterns
 - **Reliability**: Ensures saga state is always accurate, even under high concurrency
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -388,6 +402,8 @@ saga.StateCompensating // Compensation is in progress
 saga.StateCompensated  // All compensations completed
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -399,6 +415,8 @@ saga.StateStarted   // Step is ready to execute
 saga.StateCompleted // Step executed successfully
 saga.StateFailed    // Step execution failed
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -437,6 +455,8 @@ if s.IsFailed() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -459,6 +479,8 @@ func problematicStepHandler(ctx context.Context, s *saga.Saga, step *saga.Step) 
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -474,6 +496,8 @@ if err != nil {
     log.Printf("Failed to start compensation: %v", err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -510,6 +534,8 @@ for _, step := range saga.Steps {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -743,6 +769,8 @@ func (p *PostgresSagaStore) ListActiveSagas(ctx context.Context) ([]*saga.Saga, 
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -765,6 +793,8 @@ steps := []saga.Step{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -783,6 +813,8 @@ stepHandler := func(ctx context.Context, s *saga.Saga, step *saga.Step) error {
     return nil
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -810,6 +842,8 @@ func createOrderSaga(orderData map[string]any) []saga.Step {
     return steps
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -890,6 +924,8 @@ func buildCompensationHandlers() map[string]saga.CompensationHandler {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -990,6 +1026,8 @@ func handleStepCompletion(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1028,6 +1066,8 @@ func startSagaWorkers(manager *saga.Manager, config saga.Config) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1057,6 +1097,8 @@ func startSagaService() {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1089,6 +1131,8 @@ stepHandler := func(ctx context.Context, s *saga.Saga, step *saga.Step) error {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1105,6 +1149,8 @@ stepHandler := func(ctx context.Context, s *saga.Saga, step *saga.Step) error {
     return performOperationWithTimeout(ctx, step.Input)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1144,6 +1190,8 @@ stepHandler := func(ctx context.Context, s *saga.Saga, step *saga.Step) error {
     return nil
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1194,6 +1242,8 @@ stepHandler := func(ctx context.Context, s *saga.Saga, step *saga.Step) error {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1236,6 +1286,8 @@ func emitStaleSagaMetric(sagaID, sagaName string, staleDuration time.Duration) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1276,6 +1328,8 @@ func createOrderHandler(ctx context.Context, s *saga.Saga, step *saga.Step) erro
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1312,6 +1366,8 @@ func deleteOrderCompensation(ctx context.Context, s *saga.Saga, step *saga.Step)
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1321,12 +1377,14 @@ func deleteOrderCompensation(ctx context.Context, s *saga.Saga, step *saga.Step)
 ### Config Structure
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `SagaExchange` | `string` | Exchange for saga coordination messages |
 | `StepQueue` | `string` | Queue for step execution messages |
 | `CompensateQueue` | `string` | Queue for compensation messages |
 | `StepHandlers` | `map[string]StepHandler` | Step execution handlers (required for orchestration) |
 | `CompensationHandlers` | `map[string]CompensationHandler` | Compensation handlers (required for orchestration) |
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1337,13 +1395,15 @@ func deleteOrderCompensation(ctx context.Context, s *saga.Saga, step *saga.Step)
 The Store interface now includes atomic operations for concurrency safety:
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `SaveSaga` | Save a complete saga (used for initial creation) |
 | `LoadSaga` | Load a saga by ID |
 | `DeleteSaga` | Delete a saga |
 | `ListActiveSagas` | List all active sagas (started or compensating) |
 | `UpdateSagaStep` | **Atomically** update a specific step within a saga |
 | `UpdateSagaState` | **Atomically** update the overall saga state |
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1352,7 +1412,7 @@ The Store interface now includes atomic operations for concurrency safety:
 ### Saga Structure
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `ID` | `string` | Unique saga identifier (ULID) |
 | `Name` | `string` | Saga name/type |
 | `State` | `State` | Current saga state |
@@ -1362,6 +1422,8 @@ The Store interface now includes atomic operations for concurrency safety:
 | `UpdatedAt` | `time.Time` | Last update timestamp |
 | `CompletedAt` | `*time.Time` | Completion timestamp (nil if not completed) |
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1369,7 +1431,7 @@ The Store interface now includes atomic operations for concurrency safety:
 ### Step Structure
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `ID` | `string` | Unique step identifier (ULID) |
 | `Name` | `string` | Human-readable step name |
 | `Action` | `string` | Action identifier for handler lookup |
@@ -1380,6 +1442,8 @@ The Store interface now includes atomic operations for concurrency safety:
 | `Error` | `string` | Error message if step failed |
 | `ExecutedAt` | `time.Time` | Step execution timestamp |
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1387,7 +1451,7 @@ The Store interface now includes atomic operations for concurrency safety:
 ### Manager Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `NewManager` | Create a new saga manager with handlers |
 | `Run` | **Start the orchestration engine** (blocks until context cancelled) |
 | `Start` | Start a new saga (returns immediately) |
@@ -1396,6 +1460,8 @@ The Store interface now includes atomic operations for concurrency safety:
 | `Compensate` | Manually trigger compensation for a saga |
 | `Stop` | Stop the orchestration engine gracefully |
 | `Close` | Close all resources (publisher, consumer) |
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1410,6 +1476,8 @@ go test ./saga
 # Run with race detection
 go test -race ./saga
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-pattern-package)
 
@@ -1442,6 +1510,8 @@ s, err := manager.Start(ctx, name, steps, context)
 
 The orchestration engine automatically handles step execution, state updates, and compensation flow.
 
+&nbsp;
+
 🔝 [back to top](#saga-pattern-package)
 
 &nbsp;
@@ -1453,5 +1523,7 @@ The orchestration engine automatically handles step execution, state updates, an
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

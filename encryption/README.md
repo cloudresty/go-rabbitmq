@@ -17,6 +17,8 @@ This package provides comprehensive message encryption capabilities for the `go-
 - **Performance Optimized**: Efficient implementations for high-throughput scenarios
 - **Pluggable Interface**: Easy to implement custom encryption algorithms
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -26,6 +28,8 @@ This package provides comprehensive message encryption capabilities for the `go-
 ```bash
 go get github.com/cloudresty/go-rabbitmq/encryption
 ```
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -76,6 +80,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -122,6 +128,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -156,6 +164,8 @@ publisher, err := rabbitmq.NewPublisher(
     rabbitmq.WithEncryption(&CustomEncryptor{}),
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -199,6 +209,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -233,6 +245,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -246,6 +260,8 @@ func main() {
 - **Key rotation**: Implement regular key rotation policies
 - **Environment variables**: Store keys in environment variables, not in code
 - **Key derivation**: Consider using key derivation functions (KDF) for password-based keys
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -274,6 +290,8 @@ for i := range key {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -285,6 +303,8 @@ for i := range key {
 - **GDPR**: Encryption satisfies "appropriate technical measures" requirement
 - **HIPAA**: Suitable for PHI encryption requirements
 - **PCI DSS**: Approved for payment card data protection
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -299,6 +319,8 @@ On typical hardware (Intel i7, 2.6GHz):
 - **Encryption**: ~500 MB/s for 1KB messages
 - **Decryption**: ~520 MB/s for 1KB messages
 - **Memory overhead**: ~28 bytes per message (nonce + auth tag)
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -315,6 +337,8 @@ publisher, err := rabbitmq.NewPublisher(
     rabbitmq.WithConnectionPoolSize(10), // Connection pooling
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -339,6 +363,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -349,6 +375,8 @@ if err != nil {
 - **crypto/aes**: Standard library AES implementation
 - **crypto/cipher**: Standard library GCM mode
 - **crypto/rand**: Secure random number generation
+
+&nbsp;
 
 🔝 [back to top](#encryption-package)
 
@@ -398,6 +426,8 @@ publisher, err := rabbitmq.NewPublisher(
 )
 ```
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -414,6 +444,8 @@ Complete examples are available in the [examples/encryption-features](../example
 
 **Security Notice**: This implementation is suitable for production use but should be reviewed by security professionals for high-security applications. Consider additional measures like key rotation, secure key storage, and audit logging for enterprise deployments.
 
+&nbsp;
+
 🔝 [back to top](#encryption-package)
 
 &nbsp;
@@ -425,5 +457,7 @@ Complete examples are available in the [examples/encryption-features](../example
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

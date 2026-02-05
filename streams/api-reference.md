@@ -4,15 +4,36 @@
 
 &nbsp;
 
-This document provides the complete API reference for the `streams` sub-package. The streams package provides RabbitMQ streams functionality for high-throughput scenarios, offering persistent, replicated, and high-performance messaging ideal for event sourcing, time-series data, and cases where message order and durability are critical.
+This document provides the complete API reference for the `streams` sub-package. The streams package provides RabbitMQ streams functionality using the **native stream protocol** (port 5552) for high-throughput scenarios, offering 5-10x better performance compared to AMQP 0.9.1.
 
 &nbsp;
 
 ## Constructor Functions
 
 | Function | Description |
-|----------|-------------|
-| `NewHandler(client *rabbitmq.Client)` | Creates a new stream handler with the provided RabbitMQ client |
+| :--- | :--- |
+| `NewHandler(opts Options) (*Handler, error)` | Creates a new stream handler using the native RabbitMQ stream protocol |
+
+&nbsp;
+
+🔝 [back to top](#streams-package-api-reference)
+
+&nbsp;
+
+## Options Struct
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `Host` | `string` | RabbitMQ host (default: "localhost") |
+| `Port` | `int` | Stream protocol port (default: 5552) |
+| `Username` | `string` | Authentication username (default: "guest") |
+| `Password` | `string` | Authentication password (default: "guest") |
+| `VHost` | `string` | Virtual host (default: "/") |
+| `MaxProducers` | `int` | Maximum producers per connection |
+| `MaxConsumers` | `int` | Maximum consumers per connection |
+| `RequestedHeartbeat` | `time.Duration` | Heartbeat interval for connection health |
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -20,22 +41,15 @@ This document provides the complete API reference for the `streams` sub-package.
 
 ## Handler Methods
 
-| Function | Description |
-|----------|-------------|
-| `PublishToStream(ctx context.Context, streamName string, message *rabbitmq.Message)` | Publishes a message to the specified stream with automatic stream creation if needed |
-| `ConsumeFromStream(ctx context.Context, streamName string, handler rabbitmq.StreamMessageHandler)` | Consumes messages from the specified stream using the provided message handler |
-| `CreateStream(ctx context.Context, streamName string, config rabbitmq.StreamConfig)` | Creates a new stream with the specified configuration (max age, max size, etc.) |
-| `DeleteStream(ctx context.Context, streamName string)` | Deletes an existing stream and all its messages |
-
-🔝 [back to top](#streams-package-api-reference)
+| Method | Description |
+| :--- | :--- |
+| `Close() error` | Closes the handler and all associated producers/consumers |
+| `PublishToStream(ctx, streamName, message) error` | Publishes a message to the specified stream |
+| `ConsumeFromStream(ctx, streamName, handler) error` | Consumes messages from the specified stream |
+| `CreateStream(ctx, streamName, config) error` | Creates a new stream with the specified configuration |
+| `DeleteStream(ctx, streamName) error` | Deletes an existing stream and all its messages |
 
 &nbsp;
-
-## Internal Methods
-
-| Function | Description |
-|----------|-------------|
-| `ensureStreamExists(ch *amqp.Channel, streamName string)` | Ensures a stream exists, creating it with default settings if needed (called internally) |
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -44,8 +58,11 @@ This document provides the complete API reference for the `streams` sub-package.
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
-| `Handler` | Main stream handler that implements the rabbitmq.StreamHandler interface for stream operations |
+| :--- | :--- |
+| `Options` | Configuration options for creating a stream handler |
+| `Handler` | Main stream handler that implements `rabbitmq.StreamHandler` interface |
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -59,25 +76,26 @@ This document provides the complete API reference for the `streams` sub-package.
 
 ```go
 import (
-    "github.com/cloudresty/go-rabbitmq/streams"
     "github.com/cloudresty/go-rabbitmq"
+    "github.com/cloudresty/go-rabbitmq/streams"
 )
 
-// Create RabbitMQ client
-client, err := rabbitmq.NewClient(rabbitmq.FromEnv())
+// Create stream handler using native protocol (port 5552)
+handler, err := streams.NewHandler(streams.Options{
+    Host:     "localhost",
+    Port:     5552,
+    Username: "guest",
+    Password: "guest",
+})
 if err != nil {
     log.Fatal(err)
 }
-defer client.Close()
-
-// Create stream handler
-handler := streams.NewHandler(client)
+defer handler.Close()
 
 // Create a stream with custom configuration
 config := rabbitmq.StreamConfig{
-    MaxAge:            24 * time.Hour,   // Retain messages for 24 hours
-    MaxLengthMessages: 1000000,          // Maximum 1M messages
-    MaxLengthBytes:    1024 * 1024 * 1024, // Maximum 1GB
+    MaxAge:         24 * time.Hour,       // Retain messages for 24 hours
+    MaxLengthBytes: 1024 * 1024 * 1024,   // Maximum 1GB
 }
 
 err = handler.CreateStream(ctx, "events-stream", config)
@@ -85,6 +103,8 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -107,6 +127,8 @@ if err != nil {
     log.Println("Message published to stream successfully")
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -138,6 +160,8 @@ if err != nil {
 log.Println("Started consuming from stream...")
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package-api-reference)
 
 &nbsp;
@@ -150,10 +174,12 @@ type EventStore struct {
     handler *streams.Handler
 }
 
-func NewEventStore(client *rabbitmq.Client) *EventStore {
-    return &EventStore{
-        handler: streams.NewHandler(client),
+func NewEventStore(opts streams.Options) (*EventStore, error) {
+    handler, err := streams.NewHandler(opts)
+    if err != nil {
+        return nil, err
     }
+    return &EventStore{handler: handler}, nil
 }
 
 func (es *EventStore) AppendEvent(ctx context.Context, streamName string, event interface{}) error {
@@ -177,7 +203,13 @@ func (es *EventStore) AppendEvent(ctx context.Context, streamName string, event 
 func (es *EventStore) ReplayEvents(ctx context.Context, streamName string, handler rabbitmq.StreamMessageHandler) error {
     return es.handler.ConsumeFromStream(ctx, streamName, handler)
 }
+
+func (es *EventStore) Close() error {
+    return es.handler.Close()
+}
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -192,8 +224,11 @@ type MetricsCollector struct {
     streamName string
 }
 
-func NewMetricsCollector(client *rabbitmq.Client, streamName string) *MetricsCollector {
-    handler := streams.NewHandler(client)
+func NewMetricsCollector(opts streams.Options, streamName string) (*MetricsCollector, error) {
+    handler, err := streams.NewHandler(opts)
+    if err != nil {
+        return nil, err
+    }
 
     // Create stream with time-based retention
     config := rabbitmq.StreamConfig{
@@ -204,7 +239,7 @@ func NewMetricsCollector(client *rabbitmq.Client, streamName string) *MetricsCol
     return &MetricsCollector{
         handler:    handler,
         streamName: streamName,
-    }
+    }, nil
 }
 
 func (mc *MetricsCollector) PublishMetric(ctx context.Context, metric Metric) error {
@@ -223,6 +258,8 @@ func (mc *MetricsCollector) PublishMetric(ctx context.Context, metric Metric) er
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package-api-reference)
 
 &nbsp;
@@ -230,25 +267,35 @@ func (mc *MetricsCollector) PublishMetric(ctx context.Context, metric Metric) er
 ### Stream Management
 
 ```go
+// Create stream handler
+handler, err := streams.NewHandler(streams.Options{
+    Host:     "localhost",
+    Port:     5552,
+    Username: "guest",
+    Password: "guest",
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer handler.Close()
+
 // Create multiple streams with different configurations
-streams := map[string]rabbitmq.StreamConfig{
+streamConfigs := map[string]rabbitmq.StreamConfig{
     "user-events": {
-        MaxAge:            30 * 24 * time.Hour, // 30 days
-        MaxLengthMessages: 5000000,             // 5M messages
+        MaxAge:         30 * 24 * time.Hour,      // 30 days
+        MaxLengthBytes: 5 * 1024 * 1024 * 1024,   // 5GB
     },
     "order-events": {
-        MaxAge:         7 * 24 * time.Hour, // 7 days
-        MaxLengthBytes: 2 * 1024 * 1024 * 1024, // 2GB
+        MaxAge:         7 * 24 * time.Hour,       // 7 days
+        MaxLengthBytes: 2 * 1024 * 1024 * 1024,   // 2GB
     },
     "metrics": {
         MaxAge: 24 * time.Hour, // 1 day
     },
 }
 
-handler := streams.NewHandler(client)
-
 // Create all streams
-for streamName, config := range streams {
+for streamName, config := range streamConfigs {
     err := handler.CreateStream(ctx, streamName, config)
     if err != nil {
         log.Printf("Failed to create stream %s: %v", streamName, err)
@@ -258,13 +305,15 @@ for streamName, config := range streams {
 }
 
 // Later, clean up streams if needed
-for streamName := range streams {
+for streamName := range streamConfigs {
     err := handler.DeleteStream(ctx, streamName)
     if err != nil {
         log.Printf("Failed to delete stream %s: %v", streamName, err)
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package-api-reference)
 
@@ -306,6 +355,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package-api-reference)
 
 &nbsp;
@@ -341,6 +392,8 @@ func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package-api-reference)
 
 &nbsp;
@@ -358,6 +411,8 @@ func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
 9. **Monitoring**: Monitor stream size, throughput, and consumer lag for operational visibility
 10. **Resource Management**: Properly close handlers and connections to prevent resource leaks
 
+&nbsp;
+
 🔝 [back to top](#streams-package-api-reference)
 
 &nbsp;
@@ -369,5 +424,7 @@ func consumeWithOffsetTracking(handler *streams.Handler, streamName string) {
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

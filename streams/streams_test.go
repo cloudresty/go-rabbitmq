@@ -16,23 +16,24 @@ func TestHandler_ContractImplementationPattern(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create client
-	client, err := rabbitmq.NewClient(
-		rabbitmq.WithCredentials("guest", "guest"),
-		rabbitmq.WithHosts("localhost:5672"),
-		rabbitmq.WithConnectionName("streams-test"),
-	)
+	// Create streams handler using native stream protocol (port 5552)
+	handler, err := NewHandler(Options{
+		Host:     "localhost",
+		Port:     5552,
+		Username: "guest",
+		Password: "guest",
+	})
 	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
+		t.Skip("RabbitMQ streams not available for testing (port 5552)")
 	}
 	defer func() {
-		if err := client.Close(); err != nil {
-			t.Errorf("Failed to close client: %v", err)
+		if err := handler.Close(); err != nil {
+			t.Errorf("Failed to close handler: %v", err)
 		}
 	}()
 
-	// Create streams handler using contract-implementation pattern
-	handler := NewHandler(client)
+	// Verify handler implements StreamHandler interface
+	var _ rabbitmq.StreamHandler = handler
 
 	streamName := "test-stream"
 
