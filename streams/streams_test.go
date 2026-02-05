@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -13,13 +14,23 @@ func TestHandler_ContractImplementationPattern(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	// Check if stream port is available before attempting connection
+	// This prevents the rabbitmq-stream-go-client from logging errors to stderr
+	host := "localhost"
+	port := 5552
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "5552"), 2*time.Second)
+	if err != nil {
+		t.Skip("RabbitMQ streams not available for testing (port 5552 not reachable)")
+	}
+	_ = conn.Close()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create streams handler using native stream protocol (port 5552)
 	handler, err := NewHandler(Options{
-		Host:     "localhost",
-		Port:     5552,
+		Host:     host,
+		Port:     port,
 		Username: "guest",
 		Password: "guest",
 	})
