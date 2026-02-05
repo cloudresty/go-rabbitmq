@@ -11,8 +11,10 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Configuration Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `DefaultShutdownConfig()` | Returns sensible default shutdown configuration with 30s timeout, 5s signal timeout, and 10s drain time |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -21,9 +23,11 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Constructor Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewShutdownManager(config ShutdownConfig)` | Creates a new shutdown manager with the specified configuration |
 | `NewInFlightTracker()` | Creates a new in-flight operation tracker for monitoring active operations during shutdown |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -32,7 +36,7 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## ShutdownManager Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Register(component Closable)` | Registers a component for coordinated shutdown |
 | `SetupSignalHandler()` | Sets up OS signal handling for graceful shutdown on SIGINT/SIGTERM |
 | `Shutdown()` | Initiates graceful shutdown of all registered components |
@@ -41,6 +45,8 @@ This document provides the complete API reference for the `shutdown` sub-package
 | `IsShutdown()` | Returns true if shutdown has been initiated |
 | `GetInFlightTracker()` | Returns the in-flight operation tracker for monitoring active operations |
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -48,11 +54,13 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Interface Compliance Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `RegisterComponent(component rabbitmq.Closable)` | Registers a component using the simplified GracefulShutdown interface |
 | `ShutdownGracefully(ctx context.Context)` | Initiates and waits for graceful shutdown with context support |
 | `SetupSignalHandling()` | Sets up signal handling and returns a channel that closes when shutdown begins |
 | `IsShutdownComplete()` | Returns true if shutdown has completed |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -61,12 +69,14 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## InFlightTracker Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Start()` | Marks the start of an operation, returns false if tracker is closed |
 | `Done()` | Marks the completion of an operation |
 | `Close()` | Prevents new operations and waits for existing ones to complete |
 | `CloseWithTimeout(timeout time.Duration)` | Waits for in-flight operations with a timeout |
 | `IsClosed()` | Returns true if the tracker is closed to new operations |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -75,8 +85,10 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Internal Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `shutdownComponents()` | Shuts down all registered components (called internally by Shutdown) |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -85,10 +97,12 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Field Helper Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `StringField(key, value string)` | Creates a string field for structured logging |
 | `IntField(key string, value int)` | Creates an integer field for structured logging |
 | `DurationField(key string, value time.Duration)` | Creates a duration field for structured logging |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -97,11 +111,13 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Logger Interface Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Debug(msg string, fields ...Field)` | Logs debug-level messages with structured fields |
 | `Info(msg string, fields ...Field)` | Logs info-level messages with structured fields |
 | `Warn(msg string, fields ...Field)` | Logs warning-level messages with structured fields |
 | `Error(msg string, fields ...Field)` | Logs error-level messages with structured fields |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -110,7 +126,7 @@ This document provides the complete API reference for the `shutdown` sub-package
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `ShutdownManager` | Main coordinator for graceful shutdown of multiple components |
 | `InFlightTracker` | Tracks in-flight operations to ensure they complete before shutdown |
 | `ShutdownConfig` | Configuration structure for shutdown behavior and timeouts |
@@ -119,6 +135,8 @@ This document provides the complete API reference for the `shutdown` sub-package
 | `Field` | Interface for structured log fields |
 | `SimpleField` | Basic implementation of the Field interface |
 | `NoOpLogger` | No-operation logger implementation for when logging is not needed |
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -157,6 +175,8 @@ shutdownManager.Wait()
 log.Println("All components shut down gracefully")
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -174,6 +194,8 @@ config := shutdown.ShutdownConfig{
 
 shutdownManager := shutdown.NewShutdownManager(config)
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -215,6 +237,8 @@ go func() {
 }()
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -236,6 +260,8 @@ shutdownComplete := gracefulShutdown.SetupSignalHandling()
 <-shutdownComplete
 log.Println("Graceful shutdown completed")
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -266,6 +292,8 @@ config := shutdown.ShutdownConfig{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -287,6 +315,8 @@ if err := shutdownManager.WaitWithContext(ctx); err != nil {
     log.Println("Shutdown completed successfully")
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#shutdown-package-api-reference)
 
@@ -342,6 +372,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -357,6 +389,8 @@ func main() {
 7. **Error Handling**: Handle shutdown errors appropriately, especially timeout scenarios
 8. **Testing**: Test shutdown scenarios including timeout cases and signal handling
 
+&nbsp;
+
 🔝 [back to top](#shutdown-package-api-reference)
 
 &nbsp;
@@ -368,5 +402,7 @@ func main() {
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

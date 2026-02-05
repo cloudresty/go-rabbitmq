@@ -17,6 +17,8 @@ The `pool` package provides connection pooling functionality for high-throughput
 - **Configurable behavior** - Customize pool size, health check intervals, and repair settings
 - **Thread-safe operations** - Safe for concurrent use across goroutines
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -72,6 +74,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -95,6 +99,8 @@ if err != nil {
 defer connectionPool.Close()
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -114,6 +120,8 @@ if err != nil {
 // Get a specific client by index (useful for sharding)
 client := connectionPool.GetClientByIndex(2)
 ```
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -135,6 +143,8 @@ if len(stats.Errors) > 0 {
     fmt.Printf("Connection errors: %v\n", stats.Errors)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -159,6 +169,8 @@ pool.WithClientOptions(
     rabbitmq.WithConnectionName("my-pool"),
 )
 ```
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -189,6 +201,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -211,6 +225,8 @@ pool, err := pool.New(5,
 )
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -232,6 +248,8 @@ pool, err := pool.New(5, opts...)
 // Scale up based on your traffic patterns
 pool, err := pool.New(20, opts...)  // High traffic
 ```
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -261,6 +279,8 @@ config := pool.Config{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -280,6 +300,8 @@ if err != nil {
     return handleNoConnectionsAvailable()
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -314,6 +336,8 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -323,12 +347,14 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 ### Pool.Config
 
 | Field | Type | Description | Default |
-|-------|------|-------------|---------|
+| :--- | :--- | :--- | :--- |
 | `Size` | `int` | Number of connections in pool | `5` |
 | `MaxReconnectBackoff` | `time.Duration` | Maximum backoff for reconnection | `30s` |
 | `HealthCheckInterval` | `time.Duration` | Interval between health checks | `30s` |
 | `RepairEnabled` | `bool` | Enable automatic connection repair | `true` |
 | `RepairThreshold` | `time.Duration` | Time before attempting repair | `10s` |
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -337,7 +363,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 ### Pool.Stats
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `Size` | `int` | Total pool size |
 | `HealthyConnections` | `int` | Number of healthy connections |
 | `UnhealthyConnections` | `int` | Number of unhealthy connections |
@@ -347,6 +373,8 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 | `LastHealthCheck` | `time.Time` | Time of last health check |
 | `HealthMonitoringEnabled` | `bool` | Health monitoring status |
 | `RepairEnabled` | `bool` | Repair status |
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -389,6 +417,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -415,6 +445,8 @@ func startWorkers(connectionPool *pool.ConnectionPool, numWorkers int) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
@@ -425,6 +457,8 @@ func startWorkers(connectionPool *pool.ConnectionPool, numWorkers int) {
 - **Health check cost**: Frequent health checks add network overhead
 - **Repair impact**: Connection repairs cause temporary unavailability
 - **Concurrent access**: Pool operations are thread-safe but may block briefly
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -440,11 +474,15 @@ go test ./pool
 
 Note: Tests require a running RabbitMQ instance on localhost:5672.
 
+&nbsp;
+
 🔝 [back to top](#connection-pool-package)
 
 &nbsp;
 
 The connection pool provides thread-safe access to multiple RabbitMQ connections with automatic health monitoring and repair capabilities.
+
+&nbsp;
 
 🔝 [back to top](#connection-pool-package)
 
@@ -457,5 +495,7 @@ The connection pool provides thread-safe access to multiple RabbitMQ connections
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

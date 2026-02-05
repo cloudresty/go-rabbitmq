@@ -350,12 +350,13 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 
 // NewConsumer creates a new consumer from the client
 func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
-	// Default configuration
+	// Default configuration with auto-generated consumer tag
+	// Consumer tag format: <hostname>-<ulid> for traceability and uniqueness
 	config := &consumerConfig{
 		AutoAck:        false,
 		PrefetchCount:  1,
 		PrefetchSize:   0,
-		ConsumerTag:    "",
+		ConsumerTag:    GenerateConsumerTag(), // Auto-generate by default
 		Exclusive:      false,
 		NoLocal:        false,
 		NoWait:         false,
@@ -364,7 +365,7 @@ func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
 		RetryPolicy:    NoRetry,
 	}
 
-	// Apply options
+	// Apply options (can override ConsumerTag if needed)
 	for _, opt := range opts {
 		opt(config)
 	}

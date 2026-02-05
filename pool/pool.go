@@ -262,6 +262,8 @@ func (p *ConnectionPool) updateHealthyClients() {
 }
 
 // performHealthCheck checks all connections and repairs if needed
+// This function performs all I/O operations (Ping) WITHOUT holding the main lock,
+// only acquiring the lock briefly to swap the healthy clients pointer.
 func (p *ConnectionPool) performHealthCheck() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -273,6 +275,7 @@ func (p *ConnectionPool) performHealthCheck() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Step 1: Copy connections list with RLock (fast, no I/O)
 	p.mu.RLock()
 	if atomic.LoadInt32(&p.closed) == 1 {
 		p.mu.RUnlock()
@@ -286,9 +289,12 @@ func (p *ConnectionPool) performHealthCheck() {
 	p.stats.LastHealthCheck = time.Now()
 	p.stats.mu.Unlock()
 
+	// Step 2: Perform health checks WITHOUT holding any lock
+	// Build the healthy clients list during the health check to avoid double Ping
 	healthyCount := 0
 	unhealthyCount := 0
 	var repairNeeded []int
+	healthy := make([]*rabbitmq.Client, 0, len(connections))
 
 	for i, client := range connections {
 		if client == nil {
@@ -322,19 +328,24 @@ func (p *ConnectionPool) performHealthCheck() {
 				}
 			} else {
 				healthyCount++
+				// Add to healthy list - already verified by Ping
+				healthy = append(healthy, client)
 			}
 		}()
 	}
 
-	// Update statistics and healthy clients list
+	// Step 3: Only acquire lock to swap pointers (nanosecond operation, no I/O)
 	p.mu.Lock()
+	// Check if pool was closed while we were doing health checks
+	if atomic.LoadInt32(&p.closed) == 1 {
+		p.mu.Unlock()
+		return
+	}
+	p.healthyClients = healthy
 	p.stats.mu.Lock()
 	p.stats.HealthyConnections = healthyCount
 	p.stats.UnhealthyConnections = unhealthyCount
 	p.stats.mu.Unlock()
-
-	// Update the healthy clients list
-	p.updateHealthyClients()
 	p.mu.Unlock()
 
 	// Repair failed connections if enabled
@@ -344,6 +355,8 @@ func (p *ConnectionPool) performHealthCheck() {
 }
 
 // repairConnections attempts to recreate failed connections
+// This function rebuilds the healthy clients list directly after repair
+// without redundant Ping calls (newly created connections are healthy by definition)
 func (p *ConnectionPool) repairConnections(indices []int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -385,8 +398,16 @@ func (p *ConnectionPool) repairConnections(indices []int) {
 			"connection_index", idx)
 	}
 
-	// Update healthy clients list after repair
-	p.updateHealthyClients()
+	// Rebuild healthy clients list directly from connections
+	// Newly created connections are healthy by definition (just connected)
+	// This avoids redundant Ping calls while holding the lock
+	healthy := make([]*rabbitmq.Client, 0, len(p.connections))
+	for _, client := range p.connections {
+		if client != nil {
+			healthy = append(healthy, client)
+		}
+	}
+	p.healthyClients = healthy
 }
 
 // Get returns a healthy client from the pool (fast, non-blocking)

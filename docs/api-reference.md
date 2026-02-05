@@ -11,8 +11,10 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Client Creation and Management
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewClient(opts ...Option)` | Creates a new RabbitMQ client with configuration options |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -21,7 +23,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Client Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `client.Ping(ctx context.Context)` | Tests connection health with the RabbitMQ server |
 | `client.Close()` | Gracefully closes the client and all associated resources |
 | `client.Admin()` | Returns the AdminService for topology management operations |
@@ -31,6 +33,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `client.NewConsumer(opts ...ConsumerOption)` | Creates a new consumer with the specified options |
 | `client.CreateChannel()` | Creates a new AMQP channel for advanced use cases |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -38,7 +42,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Client Configuration Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithCredentials(username, password string)` | Sets authentication credentials for RabbitMQ connection |
 | `WithHosts(hosts ...string)` | Sets multiple RabbitMQ hosts for failover support |
 | `WithVHost(vhost string)` | Sets the virtual host to connect to |
@@ -61,6 +65,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `WithConnectionPooler(pooler ConnectionPooler)` | Sets connection pooler (use `pool` sub-package) |
 | `WithStreamHandler(handler StreamHandler)` | Sets stream handler (use `streams` sub-package) |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -68,9 +74,11 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Environment Configuration
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `FromEnv()` | Creates a client option that loads configuration from RABBITMQ_* environment variables |
 | `FromEnvWithPrefix(prefix string)` | Creates a client option that loads configuration with custom environment variable prefix |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -79,10 +87,12 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Publisher Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `publisher.Publish(ctx context.Context, exchange, routingKey string, message *Message)` | Publishes a message to the specified exchange with routing key |
 | `publisher.PublishBatch(ctx context.Context, messages []PublishRequest)` | Publishes multiple messages in a single batch operation |
 | `publisher.Close()` | Gracefully closes the publisher and releases resources |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -91,7 +101,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Publisher Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithDefaultExchange(exchange string)` | Sets default exchange for publishing when not specified |
 | `WithMandatory()` | Enables mandatory publishing (message must be routable) |
 | `WithMandatoryByDefault(mandatory bool)` | Sets default mandatory flag for all publishes (can be overridden per message) |
@@ -109,6 +119,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `WithSerializer(serializer MessageSerializer)` | Sets message serializer for custom serialization |
 | `WithEncryption(encryptor MessageEncryptor)` | Sets message encryption (use `encryption` sub-package) |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -116,9 +128,11 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Consumer Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `consumer.Consume(ctx context.Context, queue string, handler MessageHandler, opts ...ConsumeOption)` | Starts consuming messages from the specified queue with message handler |
 | `consumer.Close()` | Gracefully closes the consumer and stops message consumption |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -127,7 +141,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Consumer Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithAutoAck()` | Enables automatic acknowledgment of messages |
 | `WithPrefetchCount(count int)` | Sets the number of unacknowledged messages per consumer |
 | `WithPrefetchSize(size int)` | Sets the prefetch size in bytes |
@@ -143,6 +157,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `WithConsumerEncryption(encryptor MessageEncryptor)` | Sets encryption for consumer (use `encryption` sub-package) |
 | `WithConsumerSerialization(serializer MessageSerializer)` | Sets serialization for consumer |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -150,10 +166,12 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Consume Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithRejectRequeue()` | Configures message rejection to requeue messages for retry |
 | `WithConsumeRetryPolicy(policy RetryPolicy)` | Sets retry policy for consume operations |
 | `WithDeadLetterPolicy(policy DeadLetterPolicy)` | Sets dead letter policy for failed messages |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -162,7 +180,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## AdminService Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `admin.DeclareQueue(ctx context.Context, name string, opts ...QueueOption)` | Declares a queue with the specified options |
 | `admin.DeclareQuorumQueue(ctx context.Context, name string, opts ...QuorumQueueOption)` | Declares a quorum queue with enhanced durability |
 | `admin.DeclareExchange(ctx context.Context, name string, kind ExchangeType, opts ...ExchangeOption)` | Declares an exchange of the specified type |
@@ -178,6 +196,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `admin.DeclareTopology(ctx context.Context, topology *Topology)` | Declares complex topology from configuration |
 | `admin.SetupTopology(ctx context.Context, exchanges []ExchangeConfig, queues []QueueConfig, bindings []BindingConfig)` | Sets up complete topology from configuration slices |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -185,7 +205,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Queue Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithDurable()` | Makes queue durable (survives server restarts) |
 | `WithAutoDelete()` | Makes queue auto-delete when last consumer disconnects |
 | `WithExclusiveQueue()` | Makes queue exclusive to the declaring connection |
@@ -196,6 +216,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `WithDeadLetter(exchange, routingKey string)` | Sets dead letter exchange and routing key |
 | `WithDeadLetterTTL(ttl time.Duration)` | Sets TTL for dead letter messages |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -203,9 +225,11 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Quorum Queue Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithInitialGroupSize(size int)` | Sets initial quorum group size for the queue |
 | `WithQuorumDeliveryLimit(limit int)` | Sets delivery limit for quorum queues |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -214,11 +238,13 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Exchange Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithExchangeDurable()` | Makes exchange durable (survives server restarts) |
 | `WithExchangeAutoDelete()` | Makes exchange auto-delete when no longer used |
 | `WithExchangeInternal()` | Makes exchange internal (can't be published to directly) |
 | `WithExchangeArguments(args Table)` | Sets custom exchange arguments |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -227,10 +253,12 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Binding Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithBindingNoWait()` | Makes binding operation not wait for server response |
 | `WithBindingHeaders(headers map[string]any)` | Sets headers for header exchange bindings |
 | `WithBindingArguments(args Table)` | Sets custom binding arguments |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -239,12 +267,14 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Message Creation and Management
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewMessage(body []byte)` | Creates a new message with the specified body |
 | `NewMessageWithID(body []byte, messageID string)` | Creates a new message with custom message ID |
 | `NewJSONMessage(v interface{})` | Creates a new message with JSON-serialized body |
 | `NewTextMessage(body []byte)` | Creates a new text message |
 | `FromAMQPDelivery(delivery amqp.Delivery)` | Creates a message from AMQP delivery |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -253,7 +283,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Message Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `message.WithCorrelationID(correlationID string)` | Sets correlation ID for request-response patterns |
 | `message.WithReplyTo(replyTo string)` | Sets reply-to queue for responses |
 | `message.WithType(messageType string)` | Sets message type for routing and handling |
@@ -273,6 +303,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `message.Validate()` | Validates message structure and required fields |
 | `message.Clone()` | Creates a deep copy of the message |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -280,12 +312,14 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Error Handling
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewConnectionError(message string, cause error)` | Creates a new connection-related error |
 | `NewPublishError(message string, cause error)` | Creates a new publish-related error |
 | `NewConsumeError(message string, cause error)` | Creates a new consume-related error |
 | `IsRetryableError(err error)` | Checks if an error is retryable |
 | `IsConnectionError(err error)` | Checks if an error is connection-related |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -294,11 +328,13 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Utility Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `DefaultQuorumQueueConfig(name string)` | Creates default configuration for quorum queues |
 | `DefaultHAQueueConfig(name string)` | Creates default configuration for highly available queues |
 | `DefaultClassicQueueConfig(name string)` | Creates default configuration for classic queues |
 | `ExtractDeliveryInfo(delivery *amqp.Delivery)` | Extracts delivery information from AMQP delivery |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -307,7 +343,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `Client` | Main RabbitMQ client for connection management |
 | `Publisher` | Message publisher for sending messages to exchanges |
 | `Consumer` | Message consumer for receiving messages from queues |
@@ -322,6 +358,8 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | `Table` | Map type for AMQP table arguments |
 | `Error` | Base error type with category and cause information |
 
+&nbsp;
+
 🔝 [back to top](#main-package-api-reference)
 
 &nbsp;
@@ -329,11 +367,13 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 ## Retry Policies
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `ExponentialBackoff` | Exponential backoff retry policy with configurable multiplier |
 | `LinearBackoff` | Linear backoff retry policy with constant increments |
 | `FixedDelay` | Fixed delay retry policy with constant intervals |
 | `NoRetryPolicy` | No-retry policy for immediate failure |
+
+&nbsp;
 
 🔝 [back to top](#main-package-api-reference)
 
@@ -344,7 +384,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 For advanced features, see the dedicated API references for each sub-package:
 
 | Sub-Package | Description | API Reference |
-|-------------|-------------|---------------|
+| :--- | :--- | :--- |
 | `compression` | Message compression with gzip, zlib support | [API Reference](../compression/api-reference.md) |
 | `encryption` | Message encryption with AES-GCM | [API Reference](../encryption/api-reference.md) |
 | `performance` | Performance monitoring and metrics | [API Reference](../performance/api-reference.md) |
@@ -367,5 +407,7 @@ For advanced features, see the dedicated API references for each sub-package:
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

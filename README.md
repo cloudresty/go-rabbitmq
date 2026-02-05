@@ -28,6 +28,8 @@
 - [Security](#security)
 - [License](#license)
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -36,6 +38,8 @@
 
 - Go 1.24+ (recommended)
 - RabbitMQ 4.0+ (recommended)
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -47,6 +51,8 @@
 go get github.com/cloudresty/go-rabbitmq
 ```
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -56,7 +62,7 @@ go get github.com/cloudresty/go-rabbitmq
 Each sub-package implements core interfaces defined in the root package, enabling you to mix and match features as needed:
 
 | Package | Purpose | Key Features |
-|---------|---------|--------------|
+| :--- | :--- | :--- |
 | **[compression/](compression/)** | Message compression | Gzip, Zlib with configurable thresholds |
 | **[encryption/](encryption/)** | Message encryption | AES-256-GCM with secure key management |
 | **[pool/](pool/)** | Connection pooling | Round-robin, health monitoring, auto-repair |
@@ -65,6 +71,8 @@ Each sub-package implements core interfaces defined in the root package, enablin
 | **[streams/](streams/)** | RabbitMQ Streams | High-throughput, durable, ordered messaging |
 | **[shutdown/](shutdown/)** | Graceful shutdown | Signal handling, resource cleanup, timeouts |
 | **[protobuf/](protobuf/)** | Protocol Buffers | Type-safe serialization, message routing |
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -78,6 +86,8 @@ Each sub-package implements core interfaces defined in the root package, enablin
 - **Pluggable Implementations**: Concrete implementations in specialized sub-packages
 - **Mix & Match**: Combine any features - encryption + compression + pooling + streams
 - **Testing**: Easy mocking of interfaces for comprehensive unit testing
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -96,6 +106,8 @@ Each sub-package implements core interfaces defined in the root package, enablin
 - **Streams Support**: High-throughput RabbitMQ Streams for event sourcing
 - **Performance Monitoring**: Latency tracking, rate monitoring, comprehensive metrics
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -106,6 +118,8 @@ Each sub-package implements core interfaces defined in the root package, enablin
 - **Auto-Reconnection**: Intelligent retry with configurable exponential backoff
 - **Graceful Shutdown**: Signal handling with proper resource cleanup and timeouts
 - **Comprehensive Documentation**: Each sub-package has detailed README with examples
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -124,6 +138,8 @@ This library provides a straightforward approach to queue configuration with use
 - **Poison Message Protection**: Automatic delivery limits prevent infinite redelivery loops
 - **Better Performance**: Optimized for throughput in clustered environments
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -133,6 +149,8 @@ This library provides a straightforward approach to queue configuration with use
 - **Manual Configuration**: Full control over dead letter exchange and routing configuration
 - **Flexible Setup**: Configure dead letter handling exactly as needed for your topology
 - **Error Handling**: Failed messages routed according to your dead letter configuration
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -144,6 +162,8 @@ This library provides a straightforward approach to queue configuration with use
 - **Auto-Recreation**: Missing exchanges, queues, and bindings are automatically recreated
 - **Background Monitoring**: Periodic validation every 30 seconds (default, customizable)
 - **Zero Configuration**: Works out of the box - no setup required
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -190,6 +210,8 @@ queue, _ := admin.DeclareQueue(ctx, "legacy",
 
 **Benefits**: Get enterprise-grade reliability and availability with simple, user-controlled configuration.
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -197,7 +219,7 @@ queue, _ := admin.DeclareQueue(ctx, "legacy",
 ## Documentation
 
 | Document | Description |
-|----------|-------------|
+| :--- | :--- |
 | **Sub-Package READMEs** | Detailed documentation for each pluggable feature |
 | [compression/](compression/) | Message compression with Gzip and Zlib |
 | [encryption/](encryption/) | AES-256-GCM message encryption |
@@ -217,6 +239,8 @@ queue, _ := admin.DeclareQueue(ctx, "legacy",
 | [ULID Message IDs](docs/ulid-message-ids.md) | Using ULIDs for message IDs in RabbitMQ |
 | [Usage Patterns](docs/usage-patterns.md) | Common patterns for using the library effectively |
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -231,6 +255,8 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 4. Ensure all tests pass
 5. Submit a pull request
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -239,6 +265,8 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 
 If you discover a security vulnerability, please report it via email to [security@cloudresty.com](mailto:security@cloudresty.com).
 
+&nbsp;
+
 🔝 [back to top](#go-rabbitmq)
 
 &nbsp;
@@ -246,6 +274,8 @@ If you discover a security vulnerability, please report it via email to [securit
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+
+&nbsp;
 
 🔝 [back to top](#go-rabbitmq)
 
@@ -259,6 +289,6 @@ This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.t
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
 
-<sub>&copy; 2025 Cloudresty</sub>
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

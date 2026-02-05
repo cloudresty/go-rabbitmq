@@ -11,8 +11,10 @@ This document provides the complete API reference for the `pool` sub-package. Th
 ## Constructor Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `New(size int, opts ...Option)` | Creates a new connection pool with the specified size and configuration options |
+
+&nbsp;
 
 🔝 [back to top](#pool-package-api-reference)
 
@@ -21,10 +23,12 @@ This document provides the complete API reference for the `pool` sub-package. Th
 ## Configuration Options
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithHealthCheck(interval time.Duration)` | Enables health monitoring with the specified interval for automatic connection health checks |
 | `WithAutoRepair(enabled bool)` | Enables or disables automatic connection repair when unhealthy connections are detected |
 | `WithClientOptions(opts ...rabbitmq.Option)` | Sets options for the RabbitMQ clients in the pool (applied to all connections) |
+
+&nbsp;
 
 🔝 [back to top](#pool-package-api-reference)
 
@@ -33,7 +37,7 @@ This document provides the complete API reference for the `pool` sub-package. Th
 ## ConnectionPool Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Get()` | Gets a healthy client from the pool using round-robin selection |
 | `GetClientByIndex(index int)` | Gets a client by specific index from the pool |
 | `Size()` | Returns the total size of the connection pool |
@@ -43,6 +47,8 @@ This document provides the complete API reference for the `pool` sub-package. Th
 | `HealthyCount()` | Returns the number of currently healthy connections in the pool |
 | `Close()` | Gracefully closes all connections in the pool |
 
+&nbsp;
+
 🔝 [back to top](#pool-package-api-reference)
 
 &nbsp;
@@ -50,11 +56,13 @@ This document provides the complete API reference for the `pool` sub-package. Th
 ## Internal Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `startHealthMonitoring()` | Begins periodic health checks (called automatically when health monitoring is enabled) |
 | `updateHealthyClients()` | Updates the list of healthy clients (called internally during health checks) |
 | `performHealthCheck()` | Checks all connections and repairs if needed (called automatically by health monitoring) |
 | `repairConnections(indices []int)` | Repairs unhealthy connections at the specified indices |
+
+&nbsp;
 
 🔝 [back to top](#pool-package-api-reference)
 
@@ -63,10 +71,12 @@ This document provides the complete API reference for the `pool` sub-package. Th
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `ConnectionPool` | Main structure that manages multiple connections for high-throughput applications |
 | `Stats` | Public statistics structure containing pool health information, connection counts, and error details |
 | `Option` | Configuration function type for customizing pool behavior |
+
+&nbsp;
 
 🔝 [back to top](#pool-package-api-reference)
 
@@ -93,6 +103,8 @@ if err != nil {
 defer pool.Close()
 ```
 
+&nbsp;
+
 🔝 [back to top](#pool-package-api-reference)
 
 &nbsp;
@@ -113,6 +125,8 @@ if err != nil {
 }
 defer publisher.Close()
 ```
+
+&nbsp;
 
 🔝 [back to top](#pool-package-api-reference)
 
@@ -136,6 +150,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#pool-package-api-reference)
 
 &nbsp;
@@ -155,6 +171,8 @@ pool, err := pool.New(10,
 )
 ```
 
+&nbsp;
+
 🔝 [back to top](#pool-package-api-reference)
 
 &nbsp;
@@ -168,6 +186,8 @@ pool, err := pool.New(10,
 5. **Graceful Shutdown**: Always call `Close()` to properly shutdown all connections in the pool
 6. **Error Handling**: Check the return value of `Get()` method as it may return an error if no healthy connections are available
 
+&nbsp;
+
 🔝 [back to top](#pool-package-api-reference)
 
 &nbsp;
@@ -179,5 +199,7 @@ pool, err := pool.New(10,
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

@@ -23,6 +23,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/cloudresty/go-rabbitmq"
 )
@@ -35,6 +36,14 @@ const (
 	NoCompression   = gzip.NoCompression // 0
 )
 
+// bufferPool provides reusable buffers to reduce GC pressure during compression
+// Each Get() returns a *bytes.Buffer that should be Reset() and Put() back after use
+var bufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
 //
 // Gzip
 //
@@ -43,6 +52,9 @@ const (
 type Gzip struct {
 	threshold int
 	level     int
+	// writerPool is a per-level writer pool for this compressor instance
+	// This ensures writers with the correct level are reused
+	writerPool sync.Pool
 }
 
 // NewGzip creates a new gzip compressor with specified threshold and compression level
@@ -53,10 +65,18 @@ func NewGzip(threshold int, level int) rabbitmq.MessageCompressor {
 	if level < gzip.BestSpeed || level > gzip.BestCompression {
 		level = gzip.DefaultCompression
 	}
-	return &Gzip{
+	g := &Gzip{
 		threshold: threshold,
 		level:     level,
 	}
+	// Initialize per-instance writer pool with correct compression level
+	g.writerPool = sync.Pool{
+		New: func() any {
+			w, _ := gzip.NewWriterLevel(nil, g.level)
+			return w
+		},
+	}
+	return g
 }
 
 // Algorithm returns the compression algorithm name
@@ -70,27 +90,40 @@ func (g *Gzip) Threshold() int {
 }
 
 // Compress compresses the data using gzip if it exceeds the threshold
+// Uses sync.Pool for buffer and writer reuse to reduce GC pressure
 func (g *Gzip) Compress(data []byte) ([]byte, error) {
 	if len(data) < g.threshold {
 		return data, nil // Don't compress small messages
 	}
 
-	var buf bytes.Buffer
-	writer, err := gzip.NewWriterLevel(&buf, g.level)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
-	}
+	// Get buffer from pool and ensure it's reset
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+
+	// Get writer from pool and reset to use new buffer
+	writer := g.writerPool.Get().(*gzip.Writer)
+	writer.Reset(buf)
 
 	if _, err := writer.Write(data); err != nil {
 		_ = writer.Close() // Ignore close error when write fails
+		g.writerPool.Put(writer)
+		bufferPool.Put(buf)
 		return nil, fmt.Errorf("failed to write compressed data: %w", err)
 	}
 
 	if err := writer.Close(); err != nil {
+		g.writerPool.Put(writer)
+		bufferPool.Put(buf)
 		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	compressed := buf.Bytes()
+	// Return writer to pool after successful compression
+	g.writerPool.Put(writer)
+
+	// Copy compressed data before returning buffer to pool
+	compressed := make([]byte, buf.Len())
+	copy(compressed, buf.Bytes())
+	bufferPool.Put(buf)
 
 	// Only return compressed data if it's actually smaller
 	if len(compressed) < len(data) {
@@ -127,6 +160,9 @@ func (g *Gzip) Decompress(data []byte) ([]byte, error) {
 type Zlib struct {
 	threshold int
 	level     int
+	// writerPool is a per-level writer pool for this compressor instance
+	// This ensures writers with the correct level are reused
+	writerPool sync.Pool
 }
 
 // NewZlib creates a new zlib compressor with specified threshold and compression level
@@ -137,10 +173,18 @@ func NewZlib(threshold int, level int) rabbitmq.MessageCompressor {
 	if level < zlib.BestSpeed || level > zlib.BestCompression {
 		level = zlib.DefaultCompression
 	}
-	return &Zlib{
+	z := &Zlib{
 		threshold: threshold,
 		level:     level,
 	}
+	// Initialize per-instance writer pool with correct compression level
+	z.writerPool = sync.Pool{
+		New: func() any {
+			w, _ := zlib.NewWriterLevel(nil, z.level)
+			return w
+		},
+	}
+	return z
 }
 
 // Algorithm returns the compression algorithm name
@@ -154,27 +198,40 @@ func (z *Zlib) Threshold() int {
 }
 
 // Compress compresses the data using zlib if it exceeds the threshold
+// Uses sync.Pool for buffer and writer reuse to reduce GC pressure
 func (z *Zlib) Compress(data []byte) ([]byte, error) {
 	if len(data) < z.threshold {
 		return data, nil
 	}
 
-	var buf bytes.Buffer
-	writer, err := zlib.NewWriterLevel(&buf, z.level)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create zlib writer: %w", err)
-	}
+	// Get buffer from pool and ensure it's reset
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+
+	// Get writer from pool and reset to use new buffer
+	writer := z.writerPool.Get().(*zlib.Writer)
+	writer.Reset(buf)
 
 	if _, err := writer.Write(data); err != nil {
 		_ = writer.Close() // Ignore close error when write fails
+		z.writerPool.Put(writer)
+		bufferPool.Put(buf)
 		return nil, fmt.Errorf("failed to write compressed data: %w", err)
 	}
 
 	if err := writer.Close(); err != nil {
+		z.writerPool.Put(writer)
+		bufferPool.Put(buf)
 		return nil, fmt.Errorf("failed to close zlib writer: %w", err)
 	}
 
-	compressed := buf.Bytes()
+	// Return writer to pool after successful compression
+	z.writerPool.Put(writer)
+
+	// Copy compressed data before returning buffer to pool
+	compressed := make([]byte, buf.Len())
+	copy(compressed, buf.Bytes())
+	bufferPool.Put(buf)
 
 	// Only return compressed data if it's actually smaller
 	if len(compressed) < len(data) {

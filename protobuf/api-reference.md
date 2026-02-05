@@ -11,9 +11,11 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Message Creation Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewMessage(body []byte)` | Creates a new basic message with the given body |
 | `NewProtobufMessage(pb proto.Message)` | Creates a new Message from a Protocol Buffers message with automatic serialization and type headers |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -22,9 +24,11 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Message Interface Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `WithContentType(contentType string)` | Sets the content type for the message and returns the updated message |
 | `WithHeader(key string, value any)` | Adds a header to the message and returns the updated message |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -33,9 +37,11 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Message Multiplexer Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewMessageMux()` | Creates a new message multiplexer for type-safe protobuf message routing |
 | `RegisterHandler[T proto.Message](mux *MessageMux, handlerFunc func(ctx context.Context, msg T) error)` | Registers a typed protobuf handler for messages of type T |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -44,11 +50,13 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## MessageMux Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `SetDefaultHandler(handlerFunc func(ctx context.Context, delivery *Delivery) error)` | Sets the default handler for non-protobuf messages |
 | `SetUnknownProtobufHandler(handlerFunc func(ctx context.Context, messageType string, data []byte) error)` | Sets handler for unknown protobuf message types |
 | `Handle(ctx context.Context, delivery *Delivery)` | Routes and handles incoming messages using registered handlers |
 | `GetRegisteredTypes()` | Returns a list of all registered protobuf message types |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -57,9 +65,11 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Utility Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `IsProtobufMessage(delivery *Delivery)` | Checks if a delivery contains a protobuf message |
 | `GetProtobufMessageType(delivery *Delivery)` | Extracts the protobuf message type from delivery headers |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -68,7 +78,7 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Serializer Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewSerializer()` | Creates a new protobuf serializer for message marshaling/unmarshaling |
 
 🔝 [back to top](#protobuf-package-api-reference)
@@ -78,10 +88,12 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Serializer Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Serialize(msg any)` | Serializes a protobuf message to bytes |
 | `Deserialize(data []byte, target any)` | Deserializes bytes into a protobuf message |
 | `ContentType()` | Returns the content type for protobuf messages ("application/protobuf") |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -90,9 +102,11 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Internal Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `handleDefault(ctx context.Context, delivery *Delivery)` | Handles messages using the default handler (called internally) |
 | `handleUnknownProtobuf(ctx context.Context, messageType string, data []byte)` | Handles unknown protobuf types (called internally) |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -101,13 +115,15 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `Message` | Interface for RabbitMQ messages with content type and header support |
 | `Delivery` | Wrapper around amqp.Delivery with additional timestamp information |
 | `BasicMessage` | Basic implementation of the Message interface |
 | `MessageMux` | Message multiplexer for automatic routing of protobuf messages to type-safe handlers |
 | `ProtobufHandler` | Internal structure holding type-safe handler information |
 | `Serializer` | Protobuf serializer for message marshaling/unmarshaling |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -116,8 +132,10 @@ This document provides the complete API reference for the `protobuf` sub-package
 ## Constants
 
 | Constant | Description |
-|----------|-------------|
+| :--- | :--- |
 | `ContentTypeProtobuf` | Content type constant for protobuf messages ("application/protobuf") |
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -154,6 +172,8 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -197,6 +217,8 @@ consumer.Consume(ctx, "events", func(ctx context.Context, delivery *rabbitmq.Del
 })
 ```
 
+&nbsp;
+
 🔝 [back to top](#protobuf-package-api-reference)
 
 &nbsp;
@@ -214,6 +236,8 @@ if protobuf.IsProtobufMessage(delivery) {
     log.Println("Received non-protobuf message")
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#protobuf-package-api-reference)
 
@@ -241,6 +265,8 @@ if err != nil {
 log.Printf("Content type: %s", serializer.ContentType())
 ```
 
+&nbsp;
+
 🔝 [back to top](#protobuf-package-api-reference)
 
 &nbsp;
@@ -255,6 +281,8 @@ log.Printf("Content type: %s", serializer.ContentType())
 6. **Content Type**: The package automatically sets the correct content type, but you can override it if needed
 7. **Header Usage**: Use message headers for routing metadata while keeping business data in the protobuf message body
 
+&nbsp;
+
 🔝 [back to top](#protobuf-package-api-reference)
 
 &nbsp;
@@ -266,5 +294,7 @@ log.Printf("Content type: %s", serializer.ContentType())
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

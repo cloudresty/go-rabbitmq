@@ -324,10 +324,11 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	// Channel errors that indicate misuse - should not retry
-	if strings.Contains(errStr, "channel/connection is not open") ||
-		strings.Contains(errStr, "channel already closed") ||
-		strings.Contains(errStr, "precondition failed") {
+	// Note: Channel/connection closed errors are NOT explicitly marked as non-retryable here.
+	// This allows the Publisher to decide whether to retry based on AutoReconnect setting.
+	// When AutoReconnect is enabled, the Publisher can hot-swap its channel and retry.
+	// "Precondition failed" errors ARE non-retryable as they indicate misuse (e.g., wrong queue type)
+	if strings.Contains(errStr, "precondition failed") {
 		return false
 	}
 

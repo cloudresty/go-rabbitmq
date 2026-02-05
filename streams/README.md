@@ -6,16 +6,21 @@
 
 The `streams` package provides RabbitMQ Streams functionality for high-throughput messaging scenarios. RabbitMQ Streams are a persistent, replicated data structure introduced in RabbitMQ 3.9+ that offers exceptional performance for event streaming, time-series data, and cases where message order and durability are critical.
 
+This package uses the **native RabbitMQ stream protocol** (port 5552) which provides **5-10x better performance** compared to AMQP 0.9.1 for stream operations.
+
 &nbsp;
 
 ## Features
 
-- **High-Throughput Publishing**: Optimized for high-volume message publishing scenarios
+- **Native Stream Protocol**: Uses RabbitMQ's binary stream protocol (port 5552) for maximum performance
+- **Sub-Millisecond Latency**: Optimized binary protocol for ultra-low latency publishing
+- **High-Throughput**: Capable of 100k+ messages/second
 - **Durable Message Storage**: Persistent, replicated storage with configurable retention policies
 - **Stream Configuration**: Full control over stream behavior (max age, size limits, clustering)
 - **Consumer Offset Management**: Built-in support for consumer positioning and replay
-- **Auto-Creation**: Automatic stream creation with sensible defaults when needed
-- **Pluggable Interface**: Clean contract-implementation pattern for easy testing and extensibility
+- **Pluggable Interface**: Implements `rabbitmq.StreamHandler` interface for easy testing and extensibility
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -26,6 +31,8 @@ The `streams` package provides RabbitMQ Streams functionality for high-throughpu
 ```bash
 go get github.com/cloudresty/go-rabbitmq/streams
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -49,37 +56,36 @@ import (
 )
 
 func main() {
-    // Create RabbitMQ client
-    client, err := rabbitmq.NewClient(
-        rabbitmq.WithHosts("localhost:5672"),
-        rabbitmq.WithCredentials("guest", "guest"),
-    )
+    // Create streams handler using native stream protocol (port 5552)
+    // This provides 5-10x better performance compared to AMQP 0.9.1
+    handler, err := streams.NewHandler(streams.Options{
+        Host:     "localhost",
+        Port:     5552,  // Native stream protocol port
+        Username: "guest",
+        Password: "guest",
+    })
     if err != nil {
-        log.Fatal("Failed to create client:", err)
+        log.Fatal("Failed to create streams handler:", err)
     }
-    defer client.Close()
-
-    // Create streams handler
-    streamsHandler := streams.NewHandler(client)
+    defer handler.Close()
 
     // Create a stream with configuration
     streamConfig := rabbitmq.StreamConfig{
         MaxAge:            24 * time.Hour,     // Retain for 24 hours
-        MaxLengthMessages: 1_000_000,          // Max 1M messages
         MaxLengthBytes:    1024 * 1024 * 1024, // Max 1GB storage
     }
 
-    err = streamsHandler.CreateStream(context.Background(), "events.stream", streamConfig)
+    err = handler.CreateStream(context.Background(), "events.stream", streamConfig)
     if err != nil {
         log.Printf("Stream creation: %v", err)
     }
 
-    // Publish messages
+    // Publish messages (high-throughput)
     for i := 0; i < 100; i++ {
         message := rabbitmq.NewMessage([]byte(fmt.Sprintf("Event %d", i)))
         message.MessageID = fmt.Sprintf("msg-%d", i)
 
-        err = streamsHandler.PublishToStream(context.Background(), "events.stream", message)
+        err = handler.PublishToStream(context.Background(), "events.stream", message)
         if err != nil {
             log.Printf("Failed to publish: %v", err)
         }
@@ -89,7 +95,7 @@ func main() {
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    err = streamsHandler.ConsumeFromStream(ctx, "events.stream", func(ctx context.Context, delivery *rabbitmq.Delivery) error {
+    err = handler.ConsumeFromStream(ctx, "events.stream", func(ctx context.Context, delivery *rabbitmq.Delivery) error {
         fmt.Printf("Received: %s\n", delivery.Body)
         return nil
     })
@@ -98,6 +104,8 @@ func main() {
     }
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -130,6 +138,8 @@ streamConfig := rabbitmq.StreamConfig{
 err := streamsHandler.CreateStream(ctx, "high-volume.stream", streamConfig)
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -153,6 +163,8 @@ if err != nil {
     log.Printf("Failed to publish event: %v", err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -199,6 +211,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -239,53 +253,62 @@ defer func() {
 }()
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
 
-## Integration with Client
+## Connection Options
 
-### Using with Client Options
+### Basic Connection
 
 ```go
-// Create client with streams handler
-client, err := rabbitmq.NewClient(
-    rabbitmq.WithHosts("localhost:5672"),
-    rabbitmq.WithCredentials("guest", "guest"),
-    rabbitmq.WithStreamHandler(streams.NewHandler(nil)), // Note: pass nil, client will be set internally
-)
+// Create streams handler with default options
+handler, err := streams.NewHandler(streams.Options{
+    Host:     "localhost",
+    Port:     5552,  // Native stream protocol port
+    Username: "guest",
+    Password: "guest",
+})
 if err != nil {
-    log.Fatal("Failed to create client:", err)
+    log.Fatal("Failed to create streams handler:", err)
 }
-
-// Access the streams handler through the client
-// (if you need to access it directly from the client)
+defer handler.Close()
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
 
-### Manual Handler Creation
+### Advanced Connection Options
 
 ```go
-// Create client first
-client, err := rabbitmq.NewClient(
-    rabbitmq.WithHosts("localhost:5672"),
-    rabbitmq.WithCredentials("guest", "guest"),
-)
+// Create streams handler with advanced options
+handler, err := streams.NewHandler(streams.Options{
+    Host:               "rabbitmq.example.com",
+    Port:               5552,
+    Username:           "myuser",
+    Password:           "mypassword",
+    VHost:              "/production",
+    MaxProducers:       10,              // Max producers per connection
+    MaxConsumers:       10,              // Max consumers per connection
+    RequestedHeartbeat: 30 * time.Second,
+})
 if err != nil {
-    log.Fatal("Failed to create client:", err)
+    log.Fatal("Failed to create streams handler:", err)
 }
-
-// Create streams handler manually
-streamsHandler := streams.NewHandler(client)
+defer handler.Close()
 
 // Use the handler for all stream operations
-err = streamsHandler.CreateStream(ctx, "my.stream", rabbitmq.StreamConfig{
+err = handler.CreateStream(ctx, "my.stream", rabbitmq.StreamConfig{
     MaxAge: 24 * time.Hour,
 })
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -311,6 +334,8 @@ for _, message := range messages {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -333,6 +358,8 @@ go func() {
 
 err := streamsHandler.ConsumeFromStream(ctx, "stream", messageHandler)
 ```
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -378,6 +405,8 @@ if err != nil && err != context.Canceled {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -391,6 +420,8 @@ if err != nil && err != context.Canceled {
 3. **Partitioning**: Consider using multiple streams for different event types
 4. **Monitoring**: Implement proper logging and metrics collection
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -401,6 +432,8 @@ if err != nil && err != context.Canceled {
 2. **Message ID**: Use unique, meaningful message IDs for tracking (automatically preserved through streams with backup header mechanism)
 3. **Headers**: Include relevant metadata in headers for routing and filtering
 4. **Size**: Keep messages reasonably sized; use external storage for large payloads
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -413,6 +446,8 @@ if err != nil && err != context.Canceled {
 3. **Timeouts**: Use appropriate context timeouts
 4. **Graceful Shutdown**: Handle shutdown signals properly
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -423,6 +458,8 @@ if err != nil && err != context.Canceled {
 2. **Retention**: Set appropriate `MaxAge`, `MaxLengthMessages`, and `MaxLengthBytes`
 3. **Monitoring**: Monitor stream metrics and consumer lag
 4. **Backpressure**: Implement backpressure handling for high-volume scenarios
+
+&nbsp;
 
 🔝 [back to top](#streams-package)
 
@@ -436,6 +473,8 @@ For complete working examples, see:
 - [ulid-messages](../examples/ulid-messages/main.go) - Using streams with ULID message IDs
 - [ulid-verification](../examples/ulid-verification/main.go) - Message verification with streams
 
+&nbsp;
+
 🔝 [back to top](#streams-package)
 
 &nbsp;
@@ -447,5 +486,7 @@ For complete working examples, see:
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

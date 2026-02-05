@@ -11,8 +11,10 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Manager Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewManager(client *rabbitmq.Client, store Store, config Config)` | Creates a new saga manager with the specified client, persistence store, and configuration |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -21,12 +23,14 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Manager Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `Start(ctx context.Context, name string, steps []Step, sagaContext map[string]any)` | Starts a new saga with the given name, steps, and context data |
 | `Compensate(ctx context.Context, sagaID string)` | Initiates compensation for a failed saga, executing compensating actions for completed steps |
 | `Get(ctx context.Context, sagaID string)` | Retrieves a saga by its ID from the persistence store |
 | `ListActive(ctx context.Context)` | Returns a list of all currently active sagas |
 | `Close()` | Gracefully closes the saga manager and its associated resources |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -35,9 +39,11 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Internal Manager Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `publishStep(ctx context.Context, saga *Saga, step *Step)` | Publishes a step execution message (called internally during saga execution) |
 | `publishCompensation(ctx context.Context, saga *Saga, step *Step)` | Publishes a compensation message (called internally during saga compensation) |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -46,8 +52,10 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Store Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewInMemoryStore()` | Creates a new in-memory saga store for testing and development purposes |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -56,13 +64,15 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Store Interface Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `SaveSaga(ctx context.Context, saga *Saga)` | Persists a saga to the store |
 | `LoadSaga(ctx context.Context, sagaID string)` | Loads a saga from the store by its ID |
 | `DeleteSaga(ctx context.Context, sagaID string)` | Removes a saga from the store |
 | `ListActiveSagas(ctx context.Context)` | Returns all active sagas from the store |
 | `UpdateSagaStep(ctx context.Context, sagaID, stepID string, status State, output map[string]any, errorMsg string)` | Atomically updates a specific step within a saga |
 | `UpdateSagaState(ctx context.Context, sagaID string, state State)` | Atomically updates the overall saga state |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -71,13 +81,15 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Saga Methods
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `IsCompleted()` | Returns true if the saga has completed successfully |
 | `IsFailed()` | Returns true if the saga has failed |
 | `IsCompensating()` | Returns true if the saga is currently compensating (rolling back) |
 | `IsCompensated()` | Returns true if the saga has been fully compensated |
 | `GetCompletedSteps()` | Returns a slice of all completed steps in the saga |
 | `GetFailedSteps()` | Returns a slice of all failed steps in the saga |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -86,7 +98,7 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Types and Structures
 
 | Type | Description |
-|------|-------------|
+| :--- | :--- |
 | `Manager` | Main saga orchestrator that manages saga execution and coordination |
 | `Saga` | Represents a distributed transaction saga with steps, state, and context |
 | `Step` | Individual step within a saga containing action, compensation, and execution details |
@@ -95,6 +107,8 @@ This document provides the complete API reference for the `saga` sub-package. Th
 | `State` | Enumeration of possible saga and step states |
 | `Config` | Configuration structure for saga manager setup |
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -102,12 +116,14 @@ This document provides the complete API reference for the `saga` sub-package. Th
 ## Constants and States
 
 | Constant | Description |
-|----------|-------------|
+| :--- | :--- |
 | `StateStarted` | Saga or step has been started |
 | `StateCompleted` | Saga or step has completed successfully |
 | `StateFailed` | Saga or step has failed |
 | `StateCompensating` | Saga is currently executing compensating actions |
 | `StateCompensated` | Saga has been fully compensated (rolled back) |
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -168,6 +184,8 @@ if err != nil {
 log.Printf("Started saga: %s", s.ID)
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -183,6 +201,8 @@ if err != nil {
     log.Printf("Successfully initiated compensation for saga %s", sagaID)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -219,6 +239,8 @@ completedSteps := s.GetCompletedSteps()
 log.Printf("Completed %d out of %d steps", len(completedSteps), len(s.Steps))
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -237,6 +259,8 @@ for _, saga := range activeSagas {
     log.Printf("Saga %s (%s): %s", saga.ID, saga.Name, saga.State)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#saga-package-api-reference)
 
@@ -267,6 +291,8 @@ store := &DatabaseStore{db: myDB}
 manager, err := saga.NewManager(client, store, config)
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -295,6 +321,8 @@ steps := []saga.Step{
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -310,6 +338,8 @@ steps := []saga.Step{
 7. **Persistence**: Use durable storage for production sagas to survive service restarts
 8. **Step Granularity**: Design steps to be fine-grained enough for precise error handling but coarse enough to minimize complexity
 
+&nbsp;
+
 🔝 [back to top](#saga-package-api-reference)
 
 &nbsp;
@@ -321,5 +351,7 @@ steps := []saga.Step{
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

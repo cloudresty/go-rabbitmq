@@ -11,10 +11,12 @@ This document provides a complete API reference for the `compression` package, w
 ## Constructor Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewGzip(threshold int, level int)` | Creates a new gzip compressor with specified threshold and compression level |
 | `NewZlib(threshold int, level int)` | Creates a new zlib compressor with specified threshold and compression level |
 | `NewNop()` | Creates a no-operation compressor that doesn't compress data |
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -23,11 +25,13 @@ This document provides a complete API reference for the `compression` package, w
 ## Compression Level Constants
 
 | Constant | Value | Description |
-|----------|-------|-------------|
+| :--- | :--- | :--- |
 | `BestSpeed` | 1 | Fastest compression with larger output |
 | `BestCompression` | 9 | Best compression ratio with slower speed |
 | `DefaultLevel` | -1 | Default compression level (balanced speed/ratio) |
 | `NoCompression` | 0 | No compression applied |
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -38,11 +42,13 @@ This document provides a complete API reference for the `compression` package, w
 All compressor types implement the `rabbitmq.MessageCompressor` interface:
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Compress(data []byte) ([]byte, error)` | Compresses data if it exceeds the threshold size |
 | `Decompress(data []byte) ([]byte, error)` | Decompresses previously compressed data |
 | `Algorithm() string` | Returns the compression algorithm name |
 | `Threshold() int` | Returns the minimum size threshold for compression |
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -59,7 +65,7 @@ compressor := compression.NewGzip(threshold, level)
 ### Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Algorithm()` | Returns "gzip" |
 | `Threshold()` | Returns the configured size threshold |
 | `Compress(data []byte)` | Compresses data using gzip if size exceeds threshold |
@@ -69,6 +75,8 @@ compressor := compression.NewGzip(threshold, level)
 
 - **threshold**: Minimum message size in bytes to trigger compression (default: 1024)
 - **level**: Compression level from 1 (fastest) to 9 (best compression)
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -85,7 +93,7 @@ compressor := compression.NewZlib(threshold, level)
 ### Zlib Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Algorithm()` | Returns "zlib" |
 | `Threshold()` | Returns the configured size threshold |
 | `Compress(data []byte)` | Compresses data using zlib if size exceeds threshold |
@@ -95,6 +103,8 @@ compressor := compression.NewZlib(threshold, level)
 
 - **threshold**: Minimum message size in bytes to trigger compression (default: 1024)
 - **level**: Compression level from 1 (fastest) to 9 (best compression)
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -111,7 +121,7 @@ compressor := compression.NewNop()
 ### No-Op Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Algorithm()` | Returns "none" |
 | `Threshold()` | Returns 0 (no threshold) |
 | `Compress(data []byte)` | Returns data unchanged |
@@ -122,6 +132,8 @@ compressor := compression.NewNop()
 - Testing and development environments
 - Disabling compression without code changes
 - Baseline performance comparisons
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -165,6 +177,8 @@ publisher, err := client.NewPublisher(
 )
 ```
 
+&nbsp;
+
 🔝 [back to top](#compression-package-api-reference)
 
 &nbsp;
@@ -174,10 +188,12 @@ publisher, err := client.NewPublisher(
 All compression operations return descriptive errors:
 
 | Error Type | Description |
-|------------|-------------|
+| :--- | :--- |
 | Compression Errors | Issues creating or writing compressed data |
 | Decompression Errors | Invalid compressed data or decompression failures |
 | Validation Errors | Data format validation failures |
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -186,12 +202,14 @@ All compression operations return descriptive errors:
 ## Performance Considerations
 
 | Factor | Impact |
-|--------|--------|
+| :--- | :--- |
 | **Threshold Size** | Messages below threshold are not compressed |
 | **Compression Level** | Higher levels = better compression but slower speed |
 | **Message Size** | Larger messages benefit more from compression |
 | **Content Type** | Text/JSON compresses better than binary data |
 | **CPU vs Bandwidth** | Trade CPU time for reduced network usage |
+
+&nbsp;
 
 🔝 [back to top](#compression-package-api-reference)
 
@@ -205,6 +223,8 @@ All compression operations return descriptive errors:
 4. **Test with Real Data**: Compression effectiveness varies by content type
 5. **Consider CPU Impact**: Monitor CPU usage in high-throughput scenarios
 
+&nbsp;
+
 🔝 [back to top](#compression-package-api-reference)
 
 &nbsp;
@@ -216,5 +236,7 @@ All compression operations return descriptive errors:
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

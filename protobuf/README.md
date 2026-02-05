@@ -16,6 +16,8 @@ This package provides comprehensive Protocol Buffer (protobuf) message support f
 - **Fallback Handling**: Handle non-protobuf messages and unknown protobuf types
 - **Header Management**: Automatic setting of content type and message type headers
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -25,6 +27,8 @@ This package provides comprehensive Protocol Buffer (protobuf) message support f
 ```bash
 go get google.golang.org/protobuf
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -56,6 +60,8 @@ if err != nil {
 // Publish the message
 err = publisher.Publish(message, "user.events", "user.created")
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -102,6 +108,8 @@ mux.SetUnknownProtobufHandler(func(ctx context.Context, messageType string, data
 consumer.StartConsuming(mux.Handle, "user.events", []string{"user.*"})
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -122,6 +130,8 @@ types := mux.GetRegisteredTypes()
 log.Printf("Registered types: %v", types)
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -135,6 +145,8 @@ The package works with any protobuf message that implements the `proto.Message` 
 ```bash
 protoc --go_out=. --go_opt=paths=source_relative your_proto_file.proto
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -151,6 +163,8 @@ if err != nil {
     log.Printf("Failed to create protobuf message: %v", err)
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -181,6 +195,8 @@ for key, value := range protobufMsg.(*protobuf.BasicMessage).Headers {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -197,6 +213,8 @@ protobuf.RegisterHandler[*pb.UserCreated](mux, handleUserCreated)
 
 // Avoid: Mixing different versions of the same message type
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -217,6 +235,8 @@ protobuf.RegisterHandler[*pb.OrderCreated](mux, handleOrderCreated)
 protobuf.RegisterHandler[*pb.OrderShipped](mux, handleOrderShipped)
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -234,6 +254,8 @@ protobuf.RegisterHandler[*pb.UserCreated](mux, func(ctx context.Context, msg *pb
     return processUser(msg)
 })
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -257,6 +279,8 @@ message UserCreated {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -275,6 +299,8 @@ import "github.com/cloudresty/go-rabbitmq"
 import "github.com/cloudresty/go-rabbitmq/protobuf"
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -288,6 +314,8 @@ message, err := rabbitmq.NewProtobufMessage(userEvent)
 // New
 message, err := protobuf.NewProtobufMessage(userEvent)
 ```
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -303,6 +331,8 @@ rabbitmq.RegisterHandler[*pb.UserCreated](mux, handler)
 protobuf.RegisterHandler[*pb.UserCreated](mux, handler)
 ```
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -311,6 +341,8 @@ protobuf.RegisterHandler[*pb.UserCreated](mux, handler)
 
 - `google.golang.org/protobuf/proto` - Protocol Buffer runtime library
 - `github.com/rabbitmq/amqp091-go` - RabbitMQ client library
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -322,6 +354,8 @@ protobuf.RegisterHandler[*pb.UserCreated](mux, handler)
 - **Serialization Speed**: Protobuf serialization is typically faster than JSON
 - **Type Safety**: Compile-time type checking reduces runtime errors
 - **Memory Usage**: The multiplexer uses reflection for type handling, which has minimal overhead
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -339,6 +373,8 @@ Error: No handler registered for protobuf type 'your.package.MessageType'
 
 Solution: Ensure the handler is registered before starting consumption.
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -351,6 +387,8 @@ Error: failed to marshal protobuf message
 
 Solution: Verify the protobuf message is properly initialized and valid.
 
+&nbsp;
+
 🔝 [back to top](#protocol-buffer-package)
 
 &nbsp;
@@ -362,6 +400,8 @@ Error: message type mismatch: expected *pb.UserCreated, got *pb.UserUpdated
 ```
 
 Solution: Check message type headers and handler registration.
+
+&nbsp;
 
 🔝 [back to top](#protocol-buffer-package)
 
@@ -380,5 +420,7 @@ For more examples, see the `examples/` directory in the main repository.
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

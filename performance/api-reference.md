@@ -11,9 +11,11 @@ This document provides a complete API reference for the `performance` package, w
 ## Constructor Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `NewMonitor()` | Creates a new performance monitor with default settings |
 | `NewRateTracker(window time.Duration)` | Creates a new rate tracker with specified time window |
+
+&nbsp;
 
 🔝 [back to top](#performance-package-api-reference)
 
@@ -24,7 +26,7 @@ This document provides a complete API reference for the `performance` package, w
 ### Recording Operations
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `RecordConnection(success bool)` | Records a connection attempt with success/failure status |
 | `RecordReconnection()` | Records a reconnection event |
 | `RecordPublish(success bool, duration time.Duration)` | Records a publish operation with timing |
@@ -33,7 +35,7 @@ This document provides a complete API reference for the `performance` package, w
 ### Retrieving Statistics
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `GetStats()` | Returns comprehensive performance statistics |
 | `IsConnected()` | Returns current connection status |
 | `GetPublishRate()` | Returns current publish rate (operations per second) |
@@ -44,8 +46,10 @@ This document provides a complete API reference for the `performance` package, w
 ### Utility Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Reset()` | Resets all performance counters and statistics |
+
+&nbsp;
 
 🔝 [back to top](#performance-package-api-reference)
 
@@ -54,9 +58,11 @@ This document provides a complete API reference for the `performance` package, w
 ## RateTracker Methods
 
 | Method | Description |
-|--------|-------------|
+| :--- | :--- |
 | `Record()` | Records an event at the current time |
 | `Rate()` | Returns current rate (events per second) over the time window |
+
+&nbsp;
 
 🔝 [back to top](#performance-package-api-reference)
 
@@ -69,7 +75,7 @@ The `GetStats()` method returns a `Stats` struct containing:
 ### Connection Statistics
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `ConnectionsTotal` | `uint64` | Total number of connection attempts |
 | `ReconnectionsTotal` | `uint64` | Total number of reconnection attempts |
 | `IsConnected` | `bool` | Current connection status |
@@ -79,7 +85,7 @@ The `GetStats()` method returns a `Stats` struct containing:
 ### Publish Statistics
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `PublishesTotal` | `uint64` | Total number of publish operations |
 | `PublishSuccessTotal` | `uint64` | Number of successful publish operations |
 | `PublishErrorsTotal` | `uint64` | Number of failed publish operations |
@@ -89,7 +95,7 @@ The `GetStats()` method returns a `Stats` struct containing:
 ### Consume Statistics
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `ConsumesTotal` | `uint64` | Total number of consume operations |
 | `ConsumeSuccessTotal` | `uint64` | Number of successful consume operations |
 | `ConsumeErrorsTotal` | `uint64` | Number of failed consume operations |
@@ -99,13 +105,15 @@ The `GetStats()` method returns a `Stats` struct containing:
 ### Latency Statistics
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :--- | :--- | :--- |
 | `PublishLatencyP50` | `time.Duration` | 50th percentile (median) publish latency |
 | `PublishLatencyP95` | `time.Duration` | 95th percentile publish latency |
 | `PublishLatencyP99` | `time.Duration` | 99th percentile publish latency |
 | `ConsumeLatencyP50` | `time.Duration` | 50th percentile (median) consume latency |
 | `ConsumeLatencyP95` | `time.Duration` | 95th percentile consume latency |
 | `ConsumeLatencyP99` | `time.Duration` | 99th percentile consume latency |
+
+&nbsp;
 
 🔝 [back to top](#performance-package-api-reference)
 
@@ -219,6 +227,8 @@ func startPerformanceReporting(monitor *performance.Monitor, interval time.Durat
 startPerformanceReporting(monitor, 30*time.Second)
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-package-api-reference)
 
 &nbsp;
@@ -286,6 +296,8 @@ func exportToInfluxDB(monitor *performance.Monitor) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-package-api-reference)
 
 &nbsp;
@@ -320,6 +332,8 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-package-api-reference)
 
 &nbsp;
@@ -327,7 +341,7 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 ## Performance Considerations
 
 | Factor | Impact | Description |
-|--------|--------|-------------|
+| :--- | :--- | :--- |
 | **Memory Usage** | Low | Keeps last 1000 latency measurements per operation type |
 | **CPU Overhead** | Minimal | Uses atomic operations and minimal locking |
 | **Rate Window** | Configurable | Default 1-minute window for rate calculations |
@@ -340,6 +354,8 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 - **Rate Tracking**: Uses sliding window with automatic cleanup
 - **Reset Capability**: `Reset()` method clears all stored data
 - **Atomic Operations**: Minimal memory overhead for counters
+
+&nbsp;
 
 🔝 [back to top](#performance-package-api-reference)
 
@@ -355,6 +371,8 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 6. **Rate Monitoring**: Track operations per second for capacity planning
 7. **Error Classification**: Monitor both connection and operation errors separately
 
+&nbsp;
+
 🔝 [back to top](#performance-package-api-reference)
 
 &nbsp;
@@ -364,7 +382,7 @@ func healthCheckHandler(monitor *performance.Monitor) http.HandlerFunc {
 ### Common Scenarios
 
 | Issue | Symptoms | Solutions |
-|-------|----------|-----------|
+| :--- | :--- | :--- |
 | **High Latency** | P95/P99 latencies increasing | Check network, broker load, message size |
 | **Low Success Rate** | Success rate < 95% | Investigate connection stability, broker errors |
 | **Memory Growth** | Increasing memory usage | Call `Reset()` periodically or reduce retention |
@@ -388,6 +406,8 @@ if stats.PublishSuccessRate < 0.9 {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#performance-package-api-reference)
 
 &nbsp;
@@ -399,5 +419,7 @@ if stats.PublishSuccessRate < 0.9 {
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

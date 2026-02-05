@@ -26,6 +26,8 @@ Thank you for your interest in contributing to Go RabbitMQ! We welcome contribut
 
 This project and everyone participating in it is governed by our Code of Conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to [conduct@cloudresty.com](mailto:conduct@cloudresty.com).
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -41,6 +43,8 @@ This project and everyone participating in it is governed by our Code of Conduct
 - Git
 - Make (optional, for convenience commands)
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -53,6 +57,8 @@ This project and everyone participating in it is governed by our Code of Conduct
 - **Documentation**: Improve guides, examples, and API documentation
 - **Testing**: Add test coverage, improve test reliability
 - **Examples**: Create usage examples for common scenarios
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -73,6 +79,8 @@ cd go-rabbitmq
 git remote add upstream https://github.com/cloudresty/go-rabbitmq.git
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -86,6 +94,8 @@ go mod download
 # Verify everything builds
 go build ./...
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -104,6 +114,8 @@ make docker-rabbitmq
 docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -120,6 +132,8 @@ make test-integration
 # Run tests with coverage
 make test-coverage
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -138,6 +152,8 @@ git checkout -b fix/connection-leak
 git checkout -b docs/improve-examples
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -149,6 +165,8 @@ git checkout -b docs/improve-examples
 - **Documentation**: `docs/description`
 - **Tests**: `test/description`
 - **Chores**: `chore/description`
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -176,6 +194,8 @@ git commit -m "test(ulid): add performance benchmark tests"
 - `perf`: Performance improvements
 - `chore`: Build process or auxiliary tools
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -190,6 +210,8 @@ git commit -m "test(ulid): add performance benchmark tests"
 2. **Integration Tests**: Test with real RabbitMQ server
 3. **Performance Tests**: Benchmark critical paths
 4. **Example Tests**: Ensure examples compile and run
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -218,6 +240,8 @@ func TestPublishIntegration(t *testing.T) {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -232,6 +256,8 @@ export RABBITMQ_URL="amqp://localhost:5672"
 export TEST_RABBITMQ_USERNAME="test_user"
 export TEST_RABBITMQ_PASSWORD="test_pass"
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -254,6 +280,8 @@ go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -271,6 +299,8 @@ go tool cover -html=coverage.out
 - [ ] CHANGELOG.md is updated (if applicable)
 - [ ] Commit messages follow conventions
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -281,6 +311,8 @@ go tool cover -html=coverage.out
 2. Create a pull request against `main` branch
 3. Fill out the pull request template
 4. Request review from maintainers
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -310,6 +342,8 @@ Brief description of the changes.
 - [ ] Examples updated (if applicable)
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -321,6 +355,8 @@ Brief description of the changes.
 3. **Testing**: Verify functionality and performance
 4. **Approval**: At least one maintainer approval required
 5. **Merge**: Squash and merge to main branch
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -339,6 +375,8 @@ We follow the standard Go style guidelines:
 - Use [golangci-lint](https://golangci-lint.run/) for linting
 - Write clear, self-documenting code
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -356,6 +394,8 @@ make lint
 make lint-fix
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -371,6 +411,8 @@ var connectionTimeout time.Duration
 func (p *Publisher) PubWithConf(ctx context.Context, cfg PubCfg) error
 var connTO time.Duration
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -389,6 +431,8 @@ emit.Error.StructuredFields("Failed to connect to RabbitMQ",
     emit.ZString("url", sanitizeURL(url)),
     emit.ZString("error", err.Error()))
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -413,6 +457,8 @@ type PublishConfig struct {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -428,6 +474,8 @@ type PublishConfig struct {
 3. **Examples**: Working code examples in `examples/`
 4. **README**: Quick start and overview
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -438,6 +486,8 @@ type PublishConfig struct {
 - Include code examples for complex functionality
 - Update documentation when changing APIs
 - Ensure examples compile and run
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -468,6 +518,8 @@ EOF
 go run main.go
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -482,6 +534,8 @@ go run main.go
 - **GitHub Discussions**: For questions and community discussion
 - **Documentation**: Check the `docs/` directory
 - **Examples**: See `examples/` for usage patterns
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -498,6 +552,8 @@ When reporting issues, please include:
 5. **Minimal reproduction case**: Code that demonstrates the issue
 6. **Expected vs actual behavior**: What should happen vs what does happen
 7. **Logs**: Relevant log output (sanitize sensitive information)
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -533,6 +589,8 @@ What actually happens.
 // Minimal code that reproduces the issue
 ```
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 **Logs:**
@@ -540,6 +598,8 @@ What actually happens.
 ```text
 Relevant log output (sanitize sensitive data)
 ```
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -553,6 +613,8 @@ For feature requests, please provide:
 2. **Proposed solution**: How should it work?
 3. **Alternatives considered**: Other approaches you've considered
 4. **Breaking changes**: Would this break existing code?
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -568,6 +630,8 @@ For feature requests, please provide:
 4. GitHub Actions will create release
 5. Announce on relevant channels
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -580,6 +644,8 @@ Contributors are recognized in:
 - GitHub releases for version contributions
 - Special thanks in README for major features
 
+&nbsp;
+
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
 &nbsp;
@@ -589,6 +655,8 @@ Contributors are recognized in:
 Thank you for contributing to go-rabbitmq! Your efforts help make this package better for everyone.
 
 **Questions?** Feel free to open a GitHub Discussion or contact us at [contribute@cloudresty.com](mailto:contribute@cloudresty.com).
+
+&nbsp;
 
 🔝 [back to top](#contributing-to-go-rabbitmq)
 
@@ -601,5 +669,7 @@ Thank you for contributing to go-rabbitmq! Your efforts help make this package b
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

@@ -31,6 +31,8 @@ This package uses [ULID (Universally Unique Lexicographically Sortable Identifie
    48bits         80bits
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -98,6 +100,8 @@ message, err := rabbitmq.NewJSONMessage(order)
 // message.MessageID will be auto-generated as ULID
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -113,6 +117,8 @@ message := rabbitmq.NewMessageWithID([]byte(`{"data": "value"}`), customUlid)
 message := rabbitmq.NewMessageWithID([]byte(`{"data": "value"}`), "06bwgbt1dk6d6xgk61wcbv6k9g")
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -125,6 +131,8 @@ message := rabbitmq.NewMessage([]byte(`{"event": "payment"}`)).
     WithType("payment.processed").
     WithHeader("trace_id", "06bwgbt1dk6d6xgk61wcbv6k9h")
 ```
+
+&nbsp;
 
 🔝 [back to top](#ulid-message-ids)
 
@@ -176,6 +184,8 @@ if err != nil {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -198,6 +208,8 @@ WHERE ulid_id BETWEEN '06bwgbt1d00000000000000000'
                   AND '06bwgbt1dzzzzzzzzzzzzzzzz';
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -215,6 +227,8 @@ CREATE TABLE messages (
 -- Natural clustering reduces index fragmentation
 CREATE INDEX idx_messages_time_range ON messages (id, created_at);
 ```
+
+&nbsp;
 
 🔝 [back to top](#ulid-message-ids)
 
@@ -253,6 +267,8 @@ handler := func(ctx context.Context, delivery *rabbitmq.Delivery) error {
 err = consumer.Consume(ctx, "payment.responses", handler)
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -285,6 +301,8 @@ handler := func(ctx context.Context, delivery *rabbitmq.Delivery) error {
 err = consumer.Consume(ctx, "events", handler)
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -292,12 +310,14 @@ err = consumer.Consume(ctx, "events", handler)
 ## Performance Comparison
 
 | Operation | UUID v4 | ULID | Improvement |
-|-----------|---------|------|-------------|
+| :--- | :--- | :--- | :--- |
 | Generation | ~800ns | ~150ns | 6x faster |
 | String Length | 36 chars | 26 chars | 28% smaller |
 | Database Insert | Random | Sequential | Better locality |
 | Index Size | Larger | Smaller | Reduced fragmentation |
 | Sort Performance | Random | Time-ordered | Natural ordering |
+
+&nbsp;
 
 🔝 [back to top](#ulid-message-ids)
 
@@ -323,6 +343,8 @@ message := rabbitmq.NewMessage([]byte(`{"data": "value"}`))
 // message.MessageID is automatically a ULID
 ```
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -342,6 +364,8 @@ ALTER TABLE messages DROP COLUMN uuid_id;
 
 All message IDs are automatically generated as ULIDs unless explicitly overridden.
 
+&nbsp;
+
 🔝 [back to top](#ulid-message-ids)
 
 &nbsp;
@@ -353,5 +377,7 @@ All message IDs are automatically generated as ULIDs unless explicitly overridde
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;

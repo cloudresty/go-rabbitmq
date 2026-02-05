@@ -16,6 +16,8 @@ The `compression` package provides message compression functionality for the `go
 - **Threshold-based**: Only compress messages above a configurable size threshold
 - **Efficiency Check**: Only uses compressed data if it's actually smaller than original
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -25,6 +27,8 @@ The `compression` package provides message compression functionality for the `go
 ```bash
 go get github.com/cloudresty/go-rabbitmq/compression
 ```
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -75,6 +79,8 @@ func main() {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -97,6 +103,8 @@ compression.DefaultLevel    // Balanced speed/ratio (level 6)
 compression.NoCompression   // No compression (level 0)
 ```
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -108,6 +116,8 @@ compression.NoCompression   // No compression (level 0)
 compressor := compression.NewZlib(1024, compression.DefaultLevel)
 ```
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -118,6 +128,8 @@ compressor := compression.NewZlib(1024, compression.DefaultLevel)
 // For testing or when compression is not desired
 compressor := compression.NewNop()
 ```
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -135,6 +147,8 @@ type Compressor interface {
     Threshold() int
 }
 ```
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -154,6 +168,8 @@ type Compressor interface {
 - **Bandwidth limited**: Use `BestCompression` for maximum size reduction
 - **Balanced**: Use `DefaultLevel` for good compromise
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -170,6 +186,8 @@ efficientCompressor := compression.NewGzip(512, compression.BestCompression)
 // For development/testing
 noCompressor := compression.NewNop()
 ```
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -191,6 +209,8 @@ err = consumer.Consume(ctx, "compressed.queue", func(ctx context.Context, delive
     return delivery.Ack()
 })
 ```
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -223,6 +243,8 @@ func (c *CustomCompressor) Threshold() int {
 }
 ```
 
+&nbsp;
+
 🔝 [back to top](#compression-package)
 
 &nbsp;
@@ -232,12 +254,14 @@ func (c *CustomCompressor) Threshold() int {
 Benchmark results (approximate, varies by data):
 
 | Algorithm | Compression Ratio | Speed | CPU Usage |
-|-----------|------------------|-------|-----------|
+| :--- | :--- | :--- | :--- |
 | Gzip (BestSpeed) | 60-70% | Fast | Low |
 | Gzip (Default) | 50-60% | Medium | Medium |
 | Gzip (BestCompression) | 40-50% | Slow | High |
 | Zlib (Default) | 50-60% | Medium | Medium |
 | No-op | 0% | Fastest | Minimal |
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -246,6 +270,8 @@ Benchmark results (approximate, varies by data):
 ## Thread Safety
 
 All compressor implementations are thread-safe and can be used concurrently across multiple goroutines.
+
+&nbsp;
 
 🔝 [back to top](#compression-package)
 
@@ -258,5 +284,7 @@ All compressor implementations are thread-safe and can be used concurrently acro
 ### Cloudresty
 
 [Website](https://cloudresty.com) &nbsp;|&nbsp; [LinkedIn](https://www.linkedin.com/company/cloudresty) &nbsp;|&nbsp; [BlueSky](https://bsky.app/profile/cloudresty.com) &nbsp;|&nbsp; [GitHub](https://github.com/cloudresty) &nbsp;|&nbsp; [Docker Hub](https://hub.docker.com/u/cloudresty)
+
+<sub>&copy; Cloudresty - All rights reserved</sub>
 
 &nbsp;
