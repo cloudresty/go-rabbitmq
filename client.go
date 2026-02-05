@@ -299,6 +299,7 @@ func (c *Client) NewPublisher(opts ...PublisherOption) (*Publisher, error) {
 		RetryPolicy:          NoRetry,
 		deliveryTimeout:      30 * time.Second,       // Default delivery assurance timeout
 		mandatoryGracePeriod: 200 * time.Millisecond, // Default grace period for mandatory messages
+		maxConnectionRetries: 3,                      // Default: 3 attempts (backward compatible)
 	}
 
 	// Apply options
