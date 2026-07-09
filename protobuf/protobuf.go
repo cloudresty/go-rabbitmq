@@ -115,7 +115,7 @@ func RegisterHandler[T proto.Message](mux *MessageMux, handlerFunc func(ctx cont
 
 	// Use reflection to create a new instance
 	zeroType := reflect.TypeOf((*T)(nil)).Elem()
-	if zeroType.Kind() == reflect.Ptr {
+	if zeroType.Kind() == reflect.Pointer {
 		// T is *SomeType, so create new(SomeType)
 		elementType := zeroType.Elem()
 		newInstance := reflect.New(elementType).Interface().(T)
