@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudresty/ulid"
@@ -114,19 +115,65 @@ type consumeConfig struct {
 }
 
 // MessageHandler is the function signature for handling consumed messages
+//
+// Return nil to acknowledge the message; a non-nil error nacks/retries per
+// consumer config. The handler MAY instead settle manually via
+// delivery.Ack/Nack/Reject - a delivery settles exactly once, so after manual
+// settlement the return value no longer affects acknowledgment (it still
+// drives metrics, tracing and logging). Calling methods on the embedded
+// amqp.Delivery directly bypasses this guard; always use the wrapper methods.
 type MessageHandler func(ctx context.Context, delivery *Delivery) error
 
 // BatchMessageHandler is the function signature for handling batches of messages
 // It receives a slice of deliveries and should return a slice of errors (one per message)
 // A nil error at index i means message i was processed successfully
+//
+// The handler MAY instead settle manually via delivery.Ack/Nack/Reject on any
+// message in the batch - a delivery settles exactly once, so after manual
+// settlement the corresponding returned error no longer affects acknowledgment
+// (it still drives metrics, tracing and logging). Calling methods on the
+// embedded amqp.Delivery directly bypasses this guard; always use the wrapper
+// methods.
 type BatchMessageHandler func(ctx context.Context, deliveries []*Delivery) []error
 
-// Delivery wraps amqp.Delivery with additional helper methods
+// Delivery wraps amqp.Delivery with additional helper methods.
+//
+// A Delivery settles (Ack/Nack/Reject) at most once, guaranteed by an internal
+// guard. Delivery is typically used via pointer; if a Delivery value is
+// copied, the copies share the same settle guard (it is a pointer field), so
+// settling through one copy is observed by all of them.
 type Delivery struct {
 	amqp.Delivery
 
 	// Additional metadata
 	ReceivedAt time.Time
+
+	// settled guards against double-acknowledgment. A nil settled acts as a
+	// legacy passthrough gate that always allows settlement (see trySettle).
+	settled *atomic.Bool
+}
+
+// NewDelivery wraps an amqp.Delivery in a *Delivery with an active settle
+// guard, ensuring Ack/Nack/Reject can be called at most once.
+func NewDelivery(d amqp.Delivery) *Delivery {
+	return &Delivery{
+		Delivery:   d,
+		ReceivedAt: time.Now(),
+		settled:    new(atomic.Bool),
+	}
+}
+
+// trySettle attempts to claim the settle guard, returning true if this call
+// won the race (or the guard is nil, i.e. legacy passthrough, which always
+// wins). Subsequent calls return false.
+func (d *Delivery) trySettle() bool {
+	return d.settled == nil || d.settled.CompareAndSwap(false, true)
+}
+
+// isSettled reports whether the delivery has already been settled. A nil
+// guard is never considered settled (legacy passthrough).
+func (d *Delivery) isSettled() bool {
+	return d.settled != nil && d.settled.Load()
 }
 
 // BatchConsumeConfig holds configuration for batch consumption
@@ -306,7 +353,20 @@ func WithDeadLetterPolicy(policy DeadLetterPolicy) ConsumeOption {
 
 // Consumer methods
 
-// Consume starts consuming messages from the specified queue with optional settings
+// Consume starts consuming messages from the specified queue with optional settings.
+//
+// Acknowledgment contract: unless AutoAck is enabled, each message is
+// acknowledged based on the error returned by handler:
+//   - nil error: message is acknowledged
+//   - non-nil error: message is nacked/retried per the consumer's retry
+//     policy and RejectRequeue config
+//
+// The handler MAY instead settle the delivery manually via
+// delivery.Ack/Nack/Reject - a delivery settles exactly once, so after manual
+// settlement the return value no longer affects acknowledgment (it still
+// drives metrics, tracing and logging). Calling methods on the embedded
+// amqp.Delivery directly bypasses this guard; always use the wrapper
+// methods.
 func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHandler, opts ...ConsumeOption) error {
 	// Validate topology if enabled
 	if c.client.TopologyValidator() != nil {
@@ -701,10 +761,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 	c.client.config.Metrics.RecordMessageReceived(queue)
 
 	// Create our enhanced delivery wrapper
-	enhancedDelivery := &Delivery{
-		Delivery:   *delivery,
-		ReceivedAt: time.Now(),
-	}
+	enhancedDelivery := NewDelivery(*delivery)
 
 	// Apply decryption if configured
 	if c.config.Encryptor != nil {
@@ -714,7 +771,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 				"message_id", delivery.MessageId,
 				"error", err.Error())
 			// Handle as processing error
-			c.handleProcessingError(queue, delivery, fmt.Errorf("decryption failed: %w", err), config)
+			c.handleProcessingError(queue, enhancedDelivery, fmt.Errorf("decryption failed: %w", err), config)
 			return
 		}
 	}
@@ -727,7 +784,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 				"message_id", delivery.MessageId,
 				"error", err.Error())
 			// Handle as processing error
-			c.handleProcessingError(queue, delivery, fmt.Errorf("decompression failed: %w", err), config)
+			c.handleProcessingError(queue, enhancedDelivery, fmt.Errorf("decompression failed: %w", err), config)
 			return
 		}
 	}
@@ -781,7 +838,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 		span.SetStatus(SpanStatusOK, "")
 
 		if !c.config.AutoAck {
-			if err := delivery.Ack(false); err != nil {
+			if err := enhancedDelivery.Ack(); err != nil {
 				c.client.config.Logger.Error("Failed to acknowledge message",
 					"queue", queue,
 					"message_id", delivery.MessageId,
@@ -796,15 +853,15 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 	} else {
 		// Message processing failed
 		span.SetStatus(SpanStatusError, handlerErr.Error())
-		c.handleProcessingError(queue, delivery, handlerErr, config)
+		c.handleProcessingError(queue, enhancedDelivery, handlerErr, config)
 	}
 }
 
 // handleProcessingError handles message processing errors with retry logic
-func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, err error, config *consumeConfig) {
+func (c *Consumer) handleProcessingError(queue string, d *Delivery, err error, config *consumeConfig) {
 	c.client.config.Logger.Warn("Message processing failed",
 		"queue", queue,
-		"message_id", delivery.MessageId,
+		"message_id", d.MessageId,
 		"error", err.Error())
 
 	if c.config.AutoAck {
@@ -812,12 +869,19 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 		return
 	}
 
+	if d.isSettled() {
+		c.client.config.Logger.Debug("Message already settled by handler, skipping error handling",
+			"queue", queue,
+			"message_id", d.MessageId)
+		return
+	}
+
 	// Check if this is a reject error (user explicitly controls requeue)
 	if rejectErr, ok := err.(*RejectError); ok {
-		if err := delivery.Nack(false, rejectErr.Requeue); err != nil {
+		if err := d.Nack(rejectErr.Requeue); err != nil {
 			c.client.config.Logger.Error("Failed to nack message",
 				"queue", queue,
-				"message_id", delivery.MessageId,
+				"message_id", d.MessageId,
 				"error", err.Error())
 		}
 
@@ -829,13 +893,13 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 
 	// Header-based retry logic (works across distributed consumers)
 	if c.config.MaxRetries > 0 {
-		retryCount := c.getRetryCount(delivery)
+		retryCount := c.getRetryCount(&d.Delivery)
 
 		if retryCount < c.config.MaxRetries {
 			// Still have retries left
 			c.client.config.Logger.Info("Retrying message",
 				"queue", queue,
-				"message_id", delivery.MessageId,
+				"message_id", d.MessageId,
 				"attempt", retryCount+1,
 				"max_retries", c.config.MaxRetries)
 
@@ -846,27 +910,27 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 
 			// For classic queues: Ack and republish with incremented retry count
 			// For quorum queues: Just Nack(requeue=true), broker tracks x-delivery-count
-			if c.isQuorumQueue(delivery) {
+			if c.isQuorumQueue(&d.Delivery) {
 				// Quorum queue: broker tracks delivery count automatically
-				if err := delivery.Nack(false, true); err != nil {
+				if err := d.Nack(true); err != nil {
 					c.client.config.Logger.Error("Failed to nack (requeue) message",
 						"queue", queue,
-						"message_id", delivery.MessageId,
+						"message_id", d.MessageId,
 						"error", err.Error())
 				}
 			} else {
 				// Classic queue: republish with incremented retry count
-				if err := c.republishWithRetry(queue, delivery, retryCount+1); err != nil {
+				if err := c.republishWithRetry(queue, &d.Delivery, retryCount+1); err != nil {
 					c.client.config.Logger.Error("Failed to republish message for retry",
 						"queue", queue,
-						"message_id", delivery.MessageId,
+						"message_id", d.MessageId,
 						"error", err.Error())
 					// Fall back to nack without requeue (send to DLX)
-					_ = delivery.Nack(false, false)
+					_ = d.Nack(false)
 					return
 				}
 				// Ack the original message since we republished it
-				_ = delivery.Ack(false)
+				_ = d.Ack()
 			}
 
 			c.client.config.Metrics.RecordMessageRequeued(queue)
@@ -876,13 +940,13 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 		// Max retries exceeded - send to DLX
 		c.client.config.Logger.Warn("Max retries exceeded, sending to DLX",
 			"queue", queue,
-			"message_id", delivery.MessageId,
+			"message_id", d.MessageId,
 			"attempts", retryCount+1)
 
-		if err := delivery.Nack(false, false); err != nil {
+		if err := d.Nack(false); err != nil {
 			c.client.config.Logger.Error("Failed to nack (no requeue) message",
 				"queue", queue,
-				"message_id", delivery.MessageId,
+				"message_id", d.MessageId,
 				"error", err.Error())
 		}
 		return
@@ -891,10 +955,10 @@ func (c *Consumer) handleProcessingError(queue string, delivery *amqp.Delivery, 
 	// Default behavior: requeue based on configuration
 	requeue := config.RejectRequeue
 
-	if err := delivery.Nack(false, requeue); err != nil {
+	if err := d.Nack(requeue); err != nil {
 		c.client.config.Logger.Error("Failed to nack message",
 			"queue", queue,
-			"message_id", delivery.MessageId,
+			"message_id", d.MessageId,
 			"error", err.Error())
 	}
 
@@ -1031,18 +1095,42 @@ func (d *Delivery) IsRedelivered() bool {
 	return d.Redelivered
 }
 
-// Ack acknowledges the message
+// Ack acknowledges the message.
+//
+// Settles the message at most once; subsequent calls on the same delivery
+// are no-ops returning nil. Safe for concurrent use. A failed wire
+// acknowledgment still consumes the settle (the channel is dead and the
+// broker will redeliver).
 func (d *Delivery) Ack() error {
+	if !d.trySettle() {
+		return nil
+	}
 	return d.Delivery.Ack(false)
 }
 
-// Nack negatively acknowledges the message with requeue option
+// Nack negatively acknowledges the message with requeue option.
+//
+// Settles the message at most once; subsequent calls on the same delivery
+// are no-ops returning nil. Safe for concurrent use. A failed wire
+// acknowledgment still consumes the settle (the channel is dead and the
+// broker will redeliver).
 func (d *Delivery) Nack(requeue bool) error {
+	if !d.trySettle() {
+		return nil
+	}
 	return d.Delivery.Nack(false, requeue)
 }
 
-// Reject rejects the message with requeue option
+// Reject rejects the message with requeue option.
+//
+// Settles the message at most once; subsequent calls on the same delivery
+// are no-ops returning nil. Safe for concurrent use. A failed wire
+// acknowledgment still consumes the settle (the channel is dead and the
+// broker will redeliver).
 func (d *Delivery) Reject(requeue bool) error {
+	if !d.trySettle() {
+		return nil
+	}
 	return d.Delivery.Reject(requeue)
 }
 
@@ -1143,6 +1231,13 @@ func (c *Consumer) applyDecompression(delivery *Delivery) error {
 // Messages are acknowledged individually based on the error returned for each:
 //   - nil error: message is acknowledged
 //   - non-nil error: message is rejected (requeued based on RejectRequeue config)
+//
+// The handler MAY instead settle any message manually via
+// delivery.Ack/Nack/Reject - a delivery settles exactly once, so after manual
+// settlement the corresponding returned error no longer affects
+// acknowledgment (it still drives metrics, tracing and logging). Calling
+// methods on the embedded amqp.Delivery directly bypasses this guard; always
+// use the wrapper methods.
 //
 // The method blocks until the context is cancelled or Stop() is called.
 func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler BatchMessageHandler, config BatchConsumeConfig, opts ...ConsumeOption) error {
@@ -1255,10 +1350,7 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 			}
 
 			// Create enhanced delivery
-			enhancedDelivery := &Delivery{
-				Delivery:   delivery,
-				ReceivedAt: time.Now(),
-			}
+			enhancedDelivery := NewDelivery(delivery)
 
 			// Apply decompression if configured
 			if c.config.Compressor != nil {
@@ -1269,7 +1361,7 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 						"error", err.Error())
 					// Reject this message and continue
 					if !config.AutoAck {
-						_ = delivery.Reject(consumeConfig.RejectRequeue)
+						_ = enhancedDelivery.Reject(consumeConfig.RejectRequeue)
 					}
 					continue
 				}
@@ -1284,7 +1376,7 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 						"error", err.Error())
 					// Reject this message and continue
 					if !config.AutoAck {
-						_ = delivery.Reject(consumeConfig.RejectRequeue)
+						_ = enhancedDelivery.Reject(consumeConfig.RejectRequeue)
 					}
 					continue
 				}

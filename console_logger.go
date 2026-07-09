@@ -66,7 +66,7 @@ func (c *ConsoleLogger) log(level, msg string, fields ...any) {
 
 	// Build the log message
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s] %s: %s", timestamp, level, msg))
+	fmt.Fprintf(&sb, "[%s] %s: %s", timestamp, level, msg)
 
 	// Add structured fields
 	if len(fields) > 0 {
@@ -75,7 +75,7 @@ func (c *ConsoleLogger) log(level, msg string, fields ...any) {
 			if i+1 < len(fields) {
 				key := fields[i]
 				value := fields[i+1]
-				sb.WriteString(fmt.Sprintf(" %v=%v", key, value))
+				fmt.Fprintf(&sb, " %v=%v", key, value)
 			}
 		}
 	}

@@ -2,11 +2,172 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// mockAcknowledger is a test double for amqp.Acknowledger that counts wire
+// operations per method with atomic counters (race-detector clean under
+// concurrent settle attempts). If ackErr is set, the first Ack call returns
+// it (and still counts as a wire attempt).
+type mockAcknowledger struct {
+	ackCount    atomic.Int64
+	nackCount   atomic.Int64
+	rejectCount atomic.Int64
+	ackErr      error
+}
+
+func (m *mockAcknowledger) Ack(tag uint64, multiple bool) error {
+	m.ackCount.Add(1)
+	if m.ackErr != nil {
+		err := m.ackErr
+		m.ackErr = nil
+		return err
+	}
+	return nil
+}
+
+func (m *mockAcknowledger) Nack(tag uint64, multiple bool, requeue bool) error {
+	m.nackCount.Add(1)
+	return nil
+}
+
+func (m *mockAcknowledger) Reject(tag uint64, requeue bool) error {
+	m.rejectCount.Add(1)
+	return nil
+}
+
+func (m *mockAcknowledger) totalWireOps() int64 {
+	return m.ackCount.Load() + m.nackCount.Load() + m.rejectCount.Load()
+}
+
+// TestDeliverySettleGate_RepeatedManualCalls verifies that once a delivery is
+// settled, subsequent Ack/Nack/Reject calls are no-ops that don't reach the
+// wire.
+func TestDeliverySettleGate_RepeatedManualCalls(t *testing.T) {
+	mock := &mockAcknowledger{}
+	d := NewDelivery(amqp.Delivery{Acknowledger: mock, DeliveryTag: 1})
+
+	if err := d.Ack(); err != nil {
+		t.Fatalf("first Ack: unexpected error: %v", err)
+	}
+	if err := d.Ack(); err != nil {
+		t.Fatalf("second Ack: expected nil, got: %v", err)
+	}
+	if err := d.Nack(false); err != nil {
+		t.Fatalf("Nack after settle: expected nil, got: %v", err)
+	}
+	if err := d.Reject(false); err != nil {
+		t.Fatalf("Reject after settle: expected nil, got: %v", err)
+	}
+
+	if got := mock.ackCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 wire Ack, got %d", got)
+	}
+	if got := mock.nackCount.Load(); got != 0 {
+		t.Errorf("expected 0 wire Nack, got %d", got)
+	}
+	if got := mock.rejectCount.Load(); got != 0 {
+		t.Errorf("expected 0 wire Reject, got %d", got)
+	}
+}
+
+// TestDeliverySettleGate_ConcurrentSettle verifies that only one wire
+// operation ever reaches the broker when many goroutines race to settle the
+// same delivery via a mix of Ack/Nack/Reject.
+func TestDeliverySettleGate_ConcurrentSettle(t *testing.T) {
+	mock := &mockAcknowledger{}
+	d := NewDelivery(amqp.Delivery{Acknowledger: mock, DeliveryTag: 1})
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			switch i % 3 {
+			case 0:
+				_ = d.Ack()
+			case 1:
+				_ = d.Nack(false)
+			case 2:
+				_ = d.Reject(false)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if got := mock.totalWireOps(); got != 1 {
+		t.Errorf("expected exactly 1 wire op across Ack/Nack/Reject, got %d (ack=%d nack=%d reject=%d)",
+			got, mock.ackCount.Load(), mock.nackCount.Load(), mock.rejectCount.Load())
+	}
+}
+
+// TestDeliverySettleGate_WireErrorStillSettles verifies that a wire-level
+// error is propagated to the caller but still consumes the settle guard - a
+// second Ack must be a silent no-op, and only one wire attempt is made.
+func TestDeliverySettleGate_WireErrorStillSettles(t *testing.T) {
+	wantErr := errors.New("channel closed")
+	mock := &mockAcknowledger{ackErr: wantErr}
+	d := NewDelivery(amqp.Delivery{Acknowledger: mock, DeliveryTag: 1})
+
+	if err := d.Ack(); !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v to be propagated, got %v", wantErr, err)
+	}
+	if err := d.Ack(); err != nil {
+		t.Fatalf("second Ack: expected nil (settle already consumed), got: %v", err)
+	}
+	if got := mock.ackCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 wire Ack attempt, got %d", got)
+	}
+}
+
+// TestDeliverySettleGate_NilGateLegacyLiteral documents that a Delivery
+// constructed directly as a literal (outside NewDelivery, e.g. by protobuf or
+// streams code) has a nil settle guard and therefore acts as a legacy
+// passthrough: every call reaches the wire.
+func TestDeliverySettleGate_NilGateLegacyLiteral(t *testing.T) {
+	mock := &mockAcknowledger{}
+	d := &Delivery{Delivery: amqp.Delivery{Acknowledger: mock, DeliveryTag: 1}}
+
+	if err := d.Ack(); err != nil {
+		t.Fatalf("first Ack: unexpected error: %v", err)
+	}
+	if err := d.Ack(); err != nil {
+		t.Fatalf("second Ack: unexpected error: %v", err)
+	}
+
+	if got := mock.ackCount.Load(); got != 2 {
+		t.Errorf("expected 2 wire Acks for nil-gate legacy passthrough, got %d", got)
+	}
+}
+
+// TestDeliverySettleGate_CopyShareGate verifies that copying a *Delivery
+// value (dereferencing the pointer) still shares the same settle guard, since
+// the guard is a pointer field - settling through one copy is observed by
+// all of them.
+func TestDeliverySettleGate_CopyShareGate(t *testing.T) {
+	mock := &mockAcknowledger{}
+	d := NewDelivery(amqp.Delivery{Acknowledger: mock, DeliveryTag: 1})
+	d2 := *d
+
+	if err := d.Ack(); err != nil {
+		t.Fatalf("d.Ack(): unexpected error: %v", err)
+	}
+	if err := (&d2).Ack(); err != nil {
+		t.Fatalf("(&d2).Ack(): expected nil (shared gate already settled), got: %v", err)
+	}
+
+	if got := mock.ackCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 wire Ack shared across the copy, got %d", got)
+	}
+}
 
 // TestDeliveryAssuranceBasic tests basic delivery assurance functionality
 func TestDeliveryAssuranceBasic(t *testing.T) {
