@@ -99,6 +99,16 @@ type consumerConfig struct {
 	// Channel-per-worker mode: each worker gets its own channel
 	// This provides better isolation - if one channel fails, only that worker is affected
 	ChannelPerWorker bool
+
+	// QueueType tells the retry path how the broker counts deliveries. It
+	// CANNOT be detected reliably from a message, which is why it is declared —
+	// see WithQueueType.
+	//
+	// Compared against QueueTypeClassic rather than QueueTypeQuorum at the use
+	// site, because QueueType is a string and its zero value is "" — an
+	// unconfigured consumer must get the quorum strategy, not fall through to
+	// the routing-key-rewriting one.
+	QueueType QueueType
 }
 
 // ConsumerOption represents a functional option for consumer configuration
@@ -193,6 +203,10 @@ func DefaultBatchConsumeConfig() BatchConsumeConfig {
 }
 
 // DeadLetterPolicy defines what to do with messages after retries are exhausted
+//
+// Deprecated: NOTHING IMPLEMENTS OR CALLS THIS. ShouldDeadLetter is never
+// invoked by the consume path. Dead-lettering happens at the broker, via a nack
+// without requeue or the queue's delivery-limit. Scheduled for removal in v2.
 type DeadLetterPolicy interface {
 	ShouldDeadLetter(delivery *Delivery, attempts int) bool
 }
@@ -290,7 +304,42 @@ func WithChannelPerWorker() ConsumerOption {
 	}
 }
 
+// WithQueueType declares how the broker counts delivery attempts for this
+// consumer's queue, which selects the retry strategy WithConsumerRetry uses.
+//
+// THIS HAS TO BE DECLARED BECAUSE IT CANNOT BE DETECTED, and getting it wrong
+// is silent in both directions.
+//
+// A quorum queue reports attempts in the x-delivery-count header — but only
+// from the first REDELIVERY. On a first delivery the header is absent, which is
+// exactly when the retry path must choose a strategy. So a presence-of-header
+// check answers "not quorum" for every first failure on a quorum queue, which
+// is how this library used to rewrite routing keys.
+//
+// Choosing wrongly:
+//
+//	quorum treated as classic — the message is republished to the default
+//	  exchange with routing key = queue name. A handler that switches on the
+//	  routing key silently sees the wrong one, and the broker's delivery count
+//	  resets, so the queue's delivery-limit stops bounding retries.
+//	classic treated as quorum — Nack(requeue=true) with no header to increment,
+//	  so the attempt count never advances and retries do not terminate.
+//
+// Defaults to quorum: RabbitMQ 4.x creates quorum queues by default, they are
+// the recommended type for durable work queues, and the strategy that choice
+// selects never rewrites a routing key.
+func WithQueueType(queueType QueueType) ConsumerOption {
+	return func(config *consumerConfig) {
+		config.QueueType = queueType
+	}
+}
+
 // WithConsumerRetryPolicy sets the retry policy for message processing failures
+//
+// Deprecated: THIS OPTION HAS NO EFFECT. The value is stored on the config and
+// never read — nothing in the consume path consults RetryPolicy. Use
+// WithConsumerRetry, which is wired, and WithQueueType to select how attempts
+// are counted. Scheduled for removal in v2.
 func WithConsumerRetryPolicy(policy RetryPolicy) ConsumerOption {
 	return func(config *consumerConfig) {
 		config.RetryPolicy = policy
@@ -337,6 +386,9 @@ func WithRejectRequeue() ConsumeOption {
 	}
 }
 
+// Deprecated: THIS OPTION HAS NO EFFECT. The value is stored and never read.
+// Use WithConsumerRetry and WithQueueType. Scheduled for removal in v2.
+//
 // WithConsumeRetryPolicy sets the retry policy for consumption
 func WithConsumeRetryPolicy(policy RetryPolicy) ConsumeOption {
 	return func(config *consumeConfig) {
@@ -344,6 +396,11 @@ func WithConsumeRetryPolicy(policy RetryPolicy) ConsumeOption {
 	}
 }
 
+// Deprecated: THIS OPTION HAS NO EFFECT. DeadLetterPolicy.ShouldDeadLetter is
+// never called anywhere in this library. Dead-lettering is driven by the
+// broker: nack without requeue, or exhaust the queue's delivery-limit. Scheduled
+// for removal in v2.
+//
 // WithDeadLetterPolicy sets the dead letter policy
 func WithDeadLetterPolicy(policy DeadLetterPolicy) ConsumeOption {
 	return func(config *consumeConfig) {
@@ -771,7 +828,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 				"message_id", delivery.MessageId,
 				"error", err.Error())
 			// Handle as processing error
-			c.handleProcessingError(queue, enhancedDelivery, fmt.Errorf("decryption failed: %w", err), config)
+			c.handleProcessingError(ctx, queue, enhancedDelivery, fmt.Errorf("decryption failed: %w", err), config)
 			return
 		}
 	}
@@ -784,7 +841,7 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 				"message_id", delivery.MessageId,
 				"error", err.Error())
 			// Handle as processing error
-			c.handleProcessingError(queue, enhancedDelivery, fmt.Errorf("decompression failed: %w", err), config)
+			c.handleProcessingError(ctx, queue, enhancedDelivery, fmt.Errorf("decompression failed: %w", err), config)
 			return
 		}
 	}
@@ -853,12 +910,12 @@ func (c *Consumer) processMessage(ctx context.Context, queue string, handler Mes
 	} else {
 		// Message processing failed
 		span.SetStatus(SpanStatusError, handlerErr.Error())
-		c.handleProcessingError(queue, enhancedDelivery, handlerErr, config)
+		c.handleProcessingError(ctx, queue, enhancedDelivery, handlerErr, config)
 	}
 }
 
 // handleProcessingError handles message processing errors with retry logic
-func (c *Consumer) handleProcessingError(queue string, d *Delivery, err error, config *consumeConfig) {
+func (c *Consumer) handleProcessingError(ctx context.Context, queue string, d *Delivery, err error, config *consumeConfig) {
 	c.client.config.Logger.Warn("Message processing failed",
 		"queue", queue,
 		"message_id", d.MessageId,
@@ -903,14 +960,32 @@ func (c *Consumer) handleProcessingError(queue string, d *Delivery, err error, c
 				"attempt", retryCount+1,
 				"max_retries", c.config.MaxRetries)
 
-			// Apply backoff if configured
+			// Apply backoff if configured.
+			//
+			// Context-aware: an unconditional time.Sleep here holds the worker
+			// through shutdown, so a rolling deploy waits out the full backoff
+			// on every in-flight message before the pod can exit.
 			if c.config.RetryBackoff > 0 {
-				time.Sleep(c.config.RetryBackoff)
+				timer := time.NewTimer(c.config.RetryBackoff)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+				case <-timer.C:
+				}
 			}
 
-			// For classic queues: Ack and republish with incremented retry count
-			// For quorum queues: Just Nack(requeue=true), broker tracks x-delivery-count
-			if c.isQuorumQueue(&d.Delivery) {
+			// The strategy comes from the DECLARED queue type, not from
+			// inspecting the message.
+			//
+			// This used to call isQuorumQueue, which tests for the presence of
+			// x-delivery-count. That header is absent on a first delivery — the
+			// exact moment this decision is made — so every first failure on a
+			// quorum queue took the classic branch and was republished to the
+			// default exchange with routing key = queue name. Consumers that
+			// switch on delivery.RoutingKey silently saw the queue name instead
+			// of the original key, and the broker's delivery count was reset, so
+			// the queue's delivery-limit no longer bounded anything.
+			if c.config.QueueType != QueueTypeClassic {
 				// Quorum queue: broker tracks delivery count automatically
 				if err := d.Nack(true); err != nil {
 					c.client.config.Logger.Error("Failed to nack (requeue) message",
@@ -919,7 +994,16 @@ func (c *Consumer) handleProcessingError(queue string, d *Delivery, err error, c
 						"error", err.Error())
 				}
 			} else {
-				// Classic queue: republish with incremented retry count
+				// Classic queue: republish with incremented retry count.
+				//
+				// This REWRITES THE ROUTING KEY to the queue name, because the
+				// republish goes to the default exchange. It is the only way to
+				// count attempts on a classic queue, and it is why quorum is the
+				// default.
+				c.client.config.Logger.Warn("Retrying via republish — the routing key is rewritten to the queue name",
+					"queue", queue,
+					"message_id", d.MessageId,
+					"original_routing_key", d.RoutingKey)
 				if err := c.republishWithRetry(queue, &d.Delivery, retryCount+1); err != nil {
 					c.client.config.Logger.Error("Failed to republish message for retry",
 						"queue", queue,
