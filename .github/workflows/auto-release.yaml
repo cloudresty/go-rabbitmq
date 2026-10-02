@@ -158,7 +158,10 @@ jobs:
     name: Determine Version
     runs-on: ubuntu-latest
     needs: comprehensive-tests
-    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    # always() is required: on a workflow_dispatch, wait-for-ci is skipped,
+    # and without it a skipped ancestor silently skips this job and every
+    # job after it, leaving a green run that released nothing.
+    if: always() && needs.comprehensive-tests.result == 'success' && needs.comprehensive-tests.outputs.tests_passed == 'true'
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
       release_type: ${{ steps.version.outputs.release_type }}
@@ -247,7 +250,8 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [comprehensive-tests, determine-version]
-    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    # always() for the same reason as determine-version above.
+    if: always() && needs.determine-version.result == 'success' && needs.comprehensive-tests.outputs.tests_passed == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

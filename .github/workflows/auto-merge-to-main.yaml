@@ -298,6 +298,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          BEFORE=$(gh release view --json tagName --jq '.tagName' 2>/dev/null || echo none)
           SINCE=$(date -u -d '30 seconds ago' +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run auto-release.yaml --ref main -f release_type=auto
 
@@ -318,6 +319,12 @@ jobs:
           gh run watch "$RUN_ID" --exit-status --interval 30
           TAG=$(gh release view --json tagName --jq '.tagName')
           echo "Latest release: $TAG"
+          # Judge the release by its artefact, not the run's status: a green
+          # Auto Release run that skipped its release jobs publishes nothing.
+          if [ "$TAG" = "$BEFORE" ]; then
+            echo "Auto Release run $RUN_ID succeeded but published no new release (still $TAG)"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create summary
