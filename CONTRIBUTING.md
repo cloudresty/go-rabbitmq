@@ -38,7 +38,7 @@ This project and everyone participating in it is governed by our Code of Conduct
 
 ### Prerequisites
 
-- Go 1.21+ (1.24+ recommended)
+- Go 1.26+
 - RabbitMQ server (for integration tests)
 - Git
 - Make (optional, for convenience commands)
