@@ -4,16 +4,41 @@ on:
   push:
     branches:
       - develop
-  pull_request:
-    types: [closed]
-    branches:
-      - develop
+  # The scheduled dependency and Go-version workflows push to develop with
+  # GITHUB_TOKEN, which fires no push workflows, so they dispatch this one
+  # (and CI) explicitly. Only a dispatch on develop proceeds.
+  workflow_dispatch:
+
+# Every credential in this workflow is the built-in GITHUB_TOKEN, scoped here.
+# There is deliberately no PAT fallback. The old
+# `CLOUDRESTY_GITBOT_PAT || GITHUB_TOKEN` expression silently switched
+# credential whenever the PAT was unset, expired or not scoped to this
+# repository; a GITHUB_TOKEN merge then fires no push workflows, so the
+# release chain stopped without an error anywhere.
+#   contents: write       merge develop into main
+#   pull-requests: write  open / reuse the develop -> main PR
+#   actions: write        dispatch Auto Release (see the merge step)
+#
+# Repository setting required: Actions > General > "Allow GitHub Actions to
+# create and approve pull requests" (can_approve_pull_request_reviews).
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+# A merged PR into develop is also a push to develop, so the push trigger
+# alone covers it; the old extra pull_request:closed trigger started a second,
+# racing run for the same commit. Runs are serialised, never cancelled, so a
+# newer develop push waits for the older merge to finish.
+concurrency:
+  group: auto-merge-to-main
+  cancel-in-progress: false
 
 env:
   GO_VERSION: '1.25'
 
 jobs:
-  # Only run if this is a push to develop or a merged PR to develop
+  # Only run for a push to develop, or a dispatch on develop
   check-trigger:
     name: Check Trigger Conditions
     runs-on: ubuntu-latest
@@ -28,8 +53,10 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
             echo "Triggered by push to develop branch"
             SHOULD_PROCEED=true
-          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.merged }}" = "true" ] && [ "${{ github.event.pull_request.base.ref }}" = "develop" ]; then
-            echo "Triggered by merged PR to develop branch"
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            echo "Dispatched on develop"
             SHOULD_PROCEED=true
           fi
 
@@ -52,7 +79,7 @@ jobs:
       - name: Wait for CI workflow
         id: wait
         env:
-          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Waiting for CI workflow to complete..."
 
@@ -161,18 +188,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          if [ -n "${{ secrets.CLOUDRESTY_GITBOT_PAT }}" ]; then
-            git config user.name "cloudresty-gitbot"
-            git config user.email "cloudresty-gitbot@users.noreply.github.com"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-          fi
 
       - name: Check if main is behind develop
         id: check_behind
@@ -191,83 +207,144 @@ jobs:
             echo "Main branch is up to date with develop"
           fi
 
-      - name: Create or update PR from develop to main
+      - name: Open and merge the develop -> main PR
+        id: merge
         if: steps.check_behind.outputs.needs_merge == 'true'
         env:
-          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_SHA: ${{ github.sha }}
         run: |
-          echo "Creating or updating PR from develop to main..."
-
-          # Ensure required labels exist
-          gh label create "automation" --description "Automated process" --color "0e8a16" 2>/dev/null || echo "Label 'automation' already exists"
-          gh label create "auto-merge" --description "Automatic merge process" --color "1d76db" 2>/dev/null || echo "Label 'auto-merge' already exists"
-
-          # Check if PR already exists
-          EXISTING_PR=$(gh pr list --base main --head develop --state open --json number,url | jq -r '.[0].url // empty')
-
-          # Get commit info for PR description
-          BEHIND_COUNT="${{ steps.check_behind.outputs.behind_count }}"
-          LATEST_COMMIT=$(git log origin/develop --oneline -1)
-
-          PR_BODY="## Auto-Merge: Develop to Main
-
-          This PR automatically merges $BEHIND_COUNT commit(s) from develop to main.
-
-          ### Latest Changes
-          - $LATEST_COMMIT
-
-          ### Validation Completed
-          ✅ Unit tests with race detection
-          ✅ Integration tests with RabbitMQ streams
-          ✅ Linting and code quality checks
-          ✅ Module verification
-
-          ### Next Steps
-          This PR will be automatically merged and trigger a release.
-
-          ---
-          *Auto-generated by merge workflow*"
-
-          if [ -n "$EXISTING_PR" ]; then
-            echo "Updating existing PR: $EXISTING_PR"
-            # Update existing PR and enable auto-merge
-            gh pr edit "$EXISTING_PR" --body "$PR_BODY" --add-label "automation,auto-merge"
-            gh pr merge "$EXISTING_PR" --auto --merge
-            echo "Auto-merge enabled for existing PR"
-            PR_URL="$EXISTING_PR"
-          else
-            echo "Creating new PR from develop to main..."
-            # Create new PR
-            PR_URL=$(gh pr create \
-              --base main \
-              --head develop \
-              --title "Auto-merge: Merge develop to main" \
-              --body "$PR_BODY" \
-              --label "automation,auto-merge")
-
-            echo "Created PR: $PR_URL"
-
-            # Enable auto-merge
-            gh pr merge "$PR_URL" --auto --merge
-            echo "Auto-merge enabled for PR"
+          DEVELOP_SHA=$(git rev-parse origin/develop)
+          if [ "$DEVELOP_SHA" != "$TESTED_SHA" ]; then
+            # Only ever merge the commit CI was waited on above. The run for
+            # the newer push is queued behind this one and will merge it.
+            echo "develop moved from $TESTED_SHA to $DEVELOP_SHA; leaving the merge to the newer run"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          # Mirror Auto Release's push path filter, so a docs-only change
+          # still reaches main without cutting a release.
+          if git diff --name-only origin/main origin/develop | grep -qE '(^go\.mod$|^go\.sum$|\.go$)'; then
+            RELEASE_RELEVANT=true
+          else
+            RELEASE_RELEVANT=false
+          fi
+          echo "Release-relevant changes: $RELEASE_RELEVANT"
+
+          gh label create "automation" --description "Automated process" --color "0e8a16" 2>/dev/null || true
+          gh label create "auto-merge" --description "Automatic merge process" --color "1d76db" 2>/dev/null || true
+
+          BEHIND_COUNT="${{ steps.check_behind.outputs.behind_count }}"
+          TITLE=$(git log -1 --format=%s origin/develop)
+          PR_BODY="## Auto-Merge: Develop to Main
+
+          Merges $BEHIND_COUNT commit(s) from develop ($DEVELOP_SHA) to main.
+
+          ### Commits
+          $(git log --format='- %h %s' origin/main..origin/develop)
+
+          CI passed on exactly this develop commit before this PR was opened.
+          Release-relevant changes (go.mod, go.sum, *.go): $RELEASE_RELEVANT
+
+          ---
+          *Auto-generated by the Auto Merge to Main workflow*"
+
+          PR_URL=$(gh pr list --base main --head develop --state open --json url --jq '.[0].url // empty')
+          if [ -n "$PR_URL" ]; then
+            echo "Reusing open PR: $PR_URL"
+            gh pr edit "$PR_URL" --title "$TITLE" --body "$PR_BODY" --add-label "automation,auto-merge"
+          else
+            PR_URL=$(gh pr create --base main --head develop --title "$TITLE" --body "$PR_BODY" --label "automation,auto-merge")
+            echo "Created PR: $PR_URL"
+          fi
+
+          # Merge directly rather than with --auto: CI has already passed on
+          # this exact commit, and main requires no status checks, so there
+          # is nothing for --auto to wait for. Mergeability is
+          # computed asynchronously right after creation, hence the retries.
+          # --match-head-commit refuses to merge anything but the tested SHA.
+          MERGED=false
+          for attempt in 1 2 3 4 5 6; do
+            if gh pr merge "$PR_URL" --merge --match-head-commit "$DEVELOP_SHA"; then
+              MERGED=true
+              break
+            fi
+            echo "Merge attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          if [ "$MERGED" != "true" ]; then
+            echo "Could not merge $PR_URL"
+            exit 1
+          fi
+
+          MERGE_SHA=$(gh pr view "$PR_URL" --json mergeCommit --jq '.mergeCommit.oid')
+          echo "Merged $PR_URL as $MERGE_SHA"
+          {
+            echo "merged=true"
+            echo "pr_url=$PR_URL"
+            echo "merge_sha=$MERGE_SHA"
+            echo "release_relevant=$RELEASE_RELEVANT"
+          } >> "$GITHUB_OUTPUT"
+
+      # A merge made with GITHUB_TOKEN deliberately triggers no push workflows,
+      # so Auto Release's `push: main` trigger never fires for it. A
+      # workflow_dispatch is the documented exception, so dispatch it here and
+      # wait for it: if the release fails, this run fails too, instead of
+      # reporting a release that never happened.
+      - name: Dispatch Auto Release and wait for it
+        id: release
+        if: steps.merge.outputs.merged == 'true' && steps.merge.outputs.release_relevant == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BEFORE=$(gh release view --json tagName --jq '.tagName' 2>/dev/null || echo none)
+          SINCE=$(date -u -d '30 seconds ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run auto-release.yaml --ref main -f release_type=auto
+
+          RUN_ID=""
+          for _ in $(seq 1 24); do
+            RUN_ID=$(gh run list --workflow auto-release.yaml --event workflow_dispatch --branch main \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | last | .databaseId // empty")
+            [ -n "$RUN_ID" ] && break
+            sleep 5
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "The dispatched Auto Release run never appeared"
+            exit 1
+          fi
+
+          echo "Watching Auto Release run $RUN_ID"
+          gh run watch "$RUN_ID" --exit-status --interval 30
+          TAG=$(gh release view --json tagName --jq '.tagName')
+          echo "Latest release: $TAG"
+          # Judge the release by its artefact, not the run's status: a green
+          # Auto Release run that skipped its release jobs publishes nothing.
+          if [ "$TAG" = "$BEFORE" ]; then
+            echo "Auto Release run $RUN_ID succeeded but published no new release (still $TAG)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create summary
         if: steps.check_behind.outputs.needs_merge == 'true'
         run: |
-          echo "## Auto-Merge Summary" >> $GITHUB_STEP_SUMMARY
-          echo "✅ All tests passed on develop branch" >> $GITHUB_STEP_SUMMARY
-          echo "✅ PR created from develop to main with auto-merge enabled" >> $GITHUB_STEP_SUMMARY
-          echo "🚀 Ready for automatic release after PR merge" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status**: Successfully merged develop to main" >> $GITHUB_STEP_SUMMARY
-          echo "**Commits merged**: ${{ steps.check_behind.outputs.behind_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tests**: All passed (unit, integration, linting, module verification)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The main branch now contains the latest changes from develop and is ready for release." >> $GITHUB_STEP_SUMMARY
-
+          {
+            echo "## Auto-Merge Summary"
+            echo ""
+            if [ "${{ steps.merge.outputs.merged }}" = "true" ]; then
+              echo "**Merged**: ${{ steps.merge.outputs.pr_url }} (${{ steps.merge.outputs.merge_sha }})"
+              echo "**Commits merged**: ${{ steps.check_behind.outputs.behind_count }}"
+              if [ "${{ steps.merge.outputs.release_relevant }}" = "true" ]; then
+                echo "**Release**: ${{ steps.release.outputs.tag }}"
+              else
+                echo "**Release**: none (no go.mod, go.sum or .go changes)"
+              fi
+            else
+              echo "**Status**: develop moved during this run; the newer run merges it"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Skip merge if not needed
         if: steps.check_behind.outputs.needs_merge == 'false'
         run: |

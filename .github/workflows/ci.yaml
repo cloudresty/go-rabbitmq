@@ -5,6 +5,9 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # GITHUB_TOKEN pushes and PRs fire no workflows, so the automation
+  # workflows dispatch CI explicitly.
+  workflow_dispatch:
 
 jobs:
   test:
