@@ -11,7 +11,10 @@ on:
   workflow_dispatch:
     inputs:
       release_type:
-        description: 'Type of release (patch, minor, major)'
+        # 'auto' derives the bump from commit messages exactly as a push to
+        # main does. Auto Merge to Main dispatches with it, because its
+        # GITHUB_TOKEN merge cannot fire the push trigger above.
+        description: 'Type of release (patch, minor, major, or auto from commit messages)'
         required: true
         default: 'patch'
         type: choice
@@ -19,6 +22,14 @@ on:
           - patch
           - minor
           - major
+          - auto
+
+# GITHUB_TOKEN only, no PAT fallback.
+#   contents: write  push the release tag and create the GitHub release
+#   actions: read    find the CI run for the released commit
+permissions:
+  contents: write
+  actions: read
 
 env:
   GO_VERSION: '1.25'
@@ -38,7 +49,7 @@ jobs:
       - name: Wait for CI workflow
         id: wait
         env:
-          GH_TOKEN: ${{ secrets.CLOUDRESTY_GITBOT_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Waiting for CI workflow to complete..."
 
@@ -147,7 +158,10 @@ jobs:
     name: Determine Version
     runs-on: ubuntu-latest
     needs: comprehensive-tests
-    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    # always() is required: on a workflow_dispatch, wait-for-ci is skipped,
+    # and without it a skipped ancestor silently skips this job and every
+    # job after it, leaving a green run that released nothing.
+    if: always() && needs.comprehensive-tests.result == 'success' && needs.comprehensive-tests.outputs.tests_passed == 'true'
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
       release_type: ${{ steps.version.outputs.release_type }}
@@ -182,7 +196,7 @@ jobs:
           # Determine release type
           RELEASE_TYPE="patch"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.release_type }}" != "auto" ]; then
             RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           else
             # Auto-determine based on commit messages since last tag
@@ -236,7 +250,8 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [comprehensive-tests, determine-version]
-    if: needs.comprehensive-tests.outputs.tests_passed == 'true'
+    # always() for the same reason as determine-version above.
+    if: always() && needs.determine-version.result == 'success' && needs.comprehensive-tests.outputs.tests_passed == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
