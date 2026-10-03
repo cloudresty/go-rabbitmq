@@ -105,25 +105,16 @@ echo "5. Main updated → Auto-release created"
 echo "6. Notifications sent (if configured)"
 echo
 
-# Create PAT token instructions
+# The pipeline runs on the built-in GITHUB_TOKEN alone; it only needs
+# Actions to be allowed to open the develop -> main pull request.
 echo
-echo -e "${YELLOW}=== REQUIRED SETUP ===${NC}"
-echo "1. Personal Access Token (PAT)"
-echo "   - Go to: https://github.com/settings/tokens"
-echo "   - Create a new token with these permissions:"
-echo "     • repo (Full control of private repositories)"
-echo "     • workflow (Update GitHub Action workflows)"
-echo "     • write:packages (Upload packages to GitHub Package Registry)"
-echo "   - Copy the token value"
-echo
-
-read -p "Enter your GitHub PAT token (or press Enter to skip): " -s CLOUDRESTY_GITBOT_PAT
-echo
-
-if [ ! -z "$CLOUDRESTY_GITBOT_PAT" ]; then
-    set_secret "CLOUDRESTY_GITBOT_PAT" "Cloudresty GitBot Personal Access Token for automation" "$CLOUDRESTY_GITBOT_PAT"
+echo -e "${BLUE}Allowing GitHub Actions to create pull requests...${NC}"
+if gh api repos/$REPO_OWNER/$REPO_NAME/actions/permissions/workflow \
+    --method PUT \
+    --field can_approve_pull_request_reviews=true >/dev/null 2>&1; then
+    echo -e "${GREEN}✓ GitHub Actions can create pull requests${NC}"
 else
-    echo -e "${YELLOW}  CLOUDRESTY_GITBOT_PAT not set. Some features may not work properly.${NC}"
+    echo -e "${YELLOW}  Could not update Actions permissions; enable it under Settings > Actions > General${NC}"
 fi
 
 # Optional setup complete - using GitHub App for notifications
