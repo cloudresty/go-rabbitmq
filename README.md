@@ -36,7 +36,7 @@
 
 ## Requirements
 
-- Go 1.24+ (recommended)
+- Go 1.26+
 - RabbitMQ 4.0+ (recommended)
 
 &nbsp;
