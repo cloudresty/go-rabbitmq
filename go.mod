@@ -1,14 +1,11 @@
 module github.com/cloudresty/go-rabbitmq
 
-go 1.25.3
-
-require github.com/rabbitmq/amqp091-go v1.10.0
-
-require github.com/cloudresty/ulid v1.2.1
-
-require github.com/cloudresty/go-env v1.0.1
+go 1.27.1
 
 require (
+	github.com/cloudresty/go-env v1.0.1
+	github.com/cloudresty/ulid v1.2.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/rabbitmq/rabbitmq-stream-go-client v1.6.3
 	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/metric v1.40.0
