@@ -302,3 +302,26 @@ func TestHealth_ConsumerSeesBrokerCancel(t *testing.T) {
 		})
 	}
 }
+
+// TestHealth_OldestPendingIgnoresClaimedEntries: an entry whose outcome was
+// already claimed (CallbackFired) is only waiting for its cleanup goroutine and
+// must not make the publisher look as if its timeout timer is wedged.
+func TestHealth_OldestPendingIgnoresClaimedEntries(t *testing.T) {
+	f := newReconnectFixture(t)
+	gen := f.publisher.currentConfirmGeneration()
+	old := time.Now().Add(-time.Hour)
+
+	claimed := &pendingMessage{MessageID: "claimed", PublishedAt: old, key: deliveryKey(gen.id, 900001), generation: gen.id, CallbackFired: true}
+	f.publisher.pendingMessages.Store("claimed", claimed.key, claimed)
+	defer f.publisher.pendingMessages.Delete("claimed", claimed.key)
+	if h := f.publisher.DeliveryHealth(); h.Pending != 1 || h.OldestPendingAge != 0 {
+		t.Fatalf("claimed entry counted: %+v", h)
+	}
+
+	live := &pendingMessage{MessageID: "live", PublishedAt: old, key: deliveryKey(gen.id, 900002), generation: gen.id}
+	f.publisher.pendingMessages.Store("live", live.key, live)
+	defer f.publisher.pendingMessages.Delete("live", live.key)
+	if h := f.publisher.DeliveryHealth(); h.OldestPendingAge < 59*time.Minute {
+		t.Fatalf("live entry ignored: %+v", h)
+	}
+}
