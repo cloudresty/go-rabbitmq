@@ -636,7 +636,10 @@ const (
 	// DeliverySuccess indicates the message was confirmed by the broker and successfully routed
 	DeliverySuccess DeliveryOutcome = "success"
 
-	// DeliveryFailed indicates the message was returned by the broker (no queue bound to routing key)
+	// DeliveryFailed indicates the message was returned by the broker (no queue bound to routing key),
+	// or that the publisher's confirm channel closed (for example after a connection loss) before the
+	// broker confirmed it. In the second case the error message says so and the message may or may not
+	// have reached the broker: callers that republish must tolerate a duplicate.
 	DeliveryFailed DeliveryOutcome = "failed"
 
 	// DeliveryNacked indicates the message was negatively acknowledged by the broker
