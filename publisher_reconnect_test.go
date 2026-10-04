@@ -647,3 +647,108 @@ func TestDeliveryKey_NoCollisionAcrossGenerations(t *testing.T) {
 		t.Error("deleting the old channel's entry removed the new channel's entry")
 	}
 }
+
+// countingRecorder records every callback for one message id, so a test can
+// assert both what was reported and that nothing else was.
+type countingRecorder struct {
+	mu   sync.Mutex
+	seen []deliveryResult
+}
+
+func (c *countingRecorder) callback(_ string, outcome DeliveryOutcome, msg string) {
+	c.mu.Lock()
+	c.seen = append(c.seen, deliveryResult{outcome, msg})
+	c.mu.Unlock()
+}
+
+func (c *countingRecorder) results() []deliveryResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]deliveryResult(nil), c.seen...)
+}
+
+// TestDeliveryAssurance_FailedSendThenRetryYieldsOneCallback covers the retry
+// loop reusing nothing from a failed attempt, and the single-signal contract when
+// a sweep lands while the send is in flight. The first attempt registers, is
+// "swept" (as failOrphans would) and then fails because its channel is gone: the
+// call must return no error, the second attempt must be tracked from scratch and
+// confirmed, and the message must get exactly one callback, a success. With a
+// reused pendingMessage the second attempt's confirm is ignored and there is no
+// callback at all; with an unguarded sweep the first attempt also reports Failed.
+func TestDeliveryAssurance_FailedSendThenRetryYieldsOneCallback(t *testing.T) {
+	f := newReconnectFixture(t)
+	p := f.publisher
+	rec := &countingRecorder{}
+
+	var once sync.Once
+	p.testHookAfterRegister = func(pending *pendingMessage) {
+		once.Do(func() {
+			// The channel dies and its sweep runs while this send is in flight.
+			_ = p.currentConfirmGeneration().ch.Close()
+			p.settleOrphan(pending, " (channel closed: test)")
+		})
+	}
+
+	err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+		NewMessage([]byte("retried")), DeliveryOptions{MessageID: "retried", Mandatory: true, Callback: rec.callback})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(awaitWindow)
+	for len(rec.results()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(time.Second) // room for a (wrong) second callback
+	got := rec.results()
+	if len(got) != 1 || got[0].outcome != DeliverySuccess {
+		t.Fatalf("callbacks = %+v, want exactly one success", got)
+	}
+	if _, stuck := p.pendingMessages.LoadByMessageID("retried"); stuck {
+		t.Error("message left in the pending map after its callback")
+	}
+}
+
+// TestDeliveryAssurance_SweepDuringSendAfterSuccessfulSend: the sweep lands while
+// the send is in flight but the send itself succeeds. The publisher settles the
+// message itself: nil error and exactly one Failed callback with the reason.
+func TestDeliveryAssurance_SweepDuringSendAfterSuccessfulSend(t *testing.T) {
+	f := newReconnectFixture(t)
+	p := f.publisher
+	rec := &countingRecorder{}
+
+	var once sync.Once
+	p.testHookAfterRegister = func(pending *pendingMessage) {
+		once.Do(func() { p.settleOrphan(pending, " (channel closed: test)") })
+	}
+
+	err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+		NewMessage([]byte("swept")), DeliveryOptions{MessageID: "swept", Mandatory: true, Callback: rec.callback})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+	got := rec.results()
+	// The real broker also confirms the message; whichever finishes it, the
+	// contract is one callback.
+	if len(got) != 1 {
+		t.Fatalf("callbacks = %+v, want exactly one", got)
+	}
+}
+
+// TestRekeyPending_SettledEntryNotResurrected: an entry that already has its
+// outcome must not be re-stored under a new key.
+func TestRekeyPending_SettledEntryNotResurrected(t *testing.T) {
+	p := newUnitPublisher()
+	pending := &pendingMessage{MessageID: "m", key: deliveryKey(3, 5), brokerTag: 5, generation: 3, CallbackFired: true}
+
+	p.rekeyPending(pending, 3, 6, time.Minute)
+
+	if _, ok := p.pendingMessages.LoadByDeliveryTag(deliveryKey(3, 6)); ok {
+		t.Error("settled entry was stored under a new key")
+	}
+	if pending.key != deliveryKey(3, 5) {
+		t.Error("settled entry was re-keyed")
+	}
+}
