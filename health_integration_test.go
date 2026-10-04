@@ -3,6 +3,8 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,6 +131,7 @@ func TestHealth_AssessNeverStalledWhileReconnecting(t *testing.T) {
 	var (
 		mu                                         sync.Mutex
 		samples, reconnectingSamples, stalledCount int
+		untrustedSamples                           int
 		violation                                  string
 	)
 	stop := make(chan struct{})
@@ -156,6 +159,9 @@ func TestHealth_AssessNeverStalledWhileReconnecting(t *testing.T) {
 			if cs.Reconnecting {
 				reconnectingSamples++
 			}
+			if cs.Reconnecting || !cs.Connected {
+				untrustedSamples++
+			}
 			if lvl == HealthStalled {
 				stalledCount++
 				if !cs.Connected || cs.Reconnecting {
@@ -180,6 +186,9 @@ func TestHealth_AssessNeverStalledWhileReconnecting(t *testing.T) {
 	}
 	if stalledCount == 0 {
 		t.Fatal("Stalled was never reachable, even on a healthy connection")
+	}
+	if untrustedSamples == 0 {
+		t.Fatal("no sampled snapshot was disconnected or reconnecting; the guard was never exercised")
 	}
 	t.Logf("%d samples, %d while Reconnecting, %d Stalled (all on a trusted connection)", samples, reconnectingSamples, stalledCount)
 }
@@ -324,4 +333,188 @@ func TestHealth_OldestPendingIgnoresClaimedEntries(t *testing.T) {
 	if h := f.publisher.DeliveryHealth(); h.OldestPendingAge < 59*time.Minute {
 		t.Fatalf("live entry ignored: %+v", h)
 	}
+}
+
+// newManualRefreshFixture is a delivery-assurance publisher whose client does NOT
+// auto-reconnect, so no keeper runs and the test drives refreshes itself.
+func newManualRefreshFixture(t *testing.T) (*Client, *Publisher) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	client, err := NewClient(
+		WithHosts("localhost:5672"),
+		WithCredentials("guest", "guest"),
+		WithConnectionName(fmt.Sprintf("health-manual-%d", time.Now().UnixNano())),
+		WithAutoReconnect(false),
+	)
+	if err != nil {
+		t.Skip("RabbitMQ not available for testing")
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	pub, err := client.NewPublisher(WithDeliveryAssurance(), WithDefaultDeliveryCallback(func(string, DeliveryOutcome, string) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+	return client, pub
+}
+
+// TestHealth_KeeperDoesNotRunWithoutAutoReconnect: with AutoReconnect off the
+// client never replaces a lost connection, so the keeper must not run.
+func TestHealth_KeeperDoesNotRunWithoutAutoReconnect(t *testing.T) {
+	_, pub := newManualRefreshFixture(t)
+	time.Sleep(300 * time.Millisecond)
+	if pub.keeperActive.Load() {
+		t.Fatal("keeper is running although AutoReconnect is disabled")
+	}
+
+	f := newReconnectFixture(t) // AutoReconnect defaults to true
+	eventually(t, 5*time.Second, "keeper to start with AutoReconnect", func() bool { return f.publisher.keeperActive.Load() })
+}
+
+// TestHealth_ConcurrentRefreshesOpenOneChannel: refreshers racing on one failed
+// generation (the keeper and the publish path in production) must open a single
+// replacement channel between them, not one each.
+func TestHealth_ConcurrentRefreshesOpenOneChannel(t *testing.T) {
+	_, pub := newManualRefreshFixture(t)
+
+	failed := pub.currentConfirmGeneration()
+	_ = failed.ch.Close() // the generation dies
+	<-failed.returnsDone
+
+	const refreshers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, refreshers)
+	start := make(chan struct{})
+	for range refreshers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- pub.refreshConfirmChannel(failed)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
+	}
+
+	if got := pub.refreshOpens.Load(); got != 1 {
+		t.Fatalf("%d channels opened for one failed generation, want 1", got)
+	}
+	if h := pub.DeliveryHealth(); !h.GenerationAlive || h.Generation != failed.id+1 {
+		t.Fatalf("health after refresh: %+v", h)
+	}
+}
+
+// TestHealth_NonBlockingRefreshNeverWaits: the keeper's refresh must give up
+// immediately, not queue, when another refresh is in progress.
+func TestHealth_NonBlockingRefreshNeverWaits(t *testing.T) {
+	_, pub := newManualRefreshFixture(t)
+	failed := pub.currentConfirmGeneration()
+	pub.refreshMu.Lock()
+	defer pub.refreshMu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- pub.refreshConfirmChannelOpt(failed, true) }()
+	select {
+	case err := <-done:
+		if err != errRefreshBusy {
+			t.Fatalf("got %v, want errRefreshBusy", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("non-blocking refresh waited for refreshMu")
+	}
+}
+
+// TestHealth_GaveUpClearsOnReconnect: GaveUp stays set until a connect succeeds.
+func TestHealth_GaveUpClearsOnReconnect(t *testing.T) {
+	f := newReconnectFixture(t)
+	f.client.stateMu.Lock()
+	f.client.state.GaveUp, f.client.state.GaveUpAt = true, time.Now()
+	f.client.stateMu.Unlock()
+	killBrokerConnection(t, f.connName)
+	eventually(t, 10*time.Second, "GaveUp to clear on the successful reconnect", func() bool {
+		cs := f.client.State()
+		return cs.Connected && !cs.GaveUp && cs.GaveUpAt.IsZero()
+	})
+}
+
+// TestHealth_BlockedConnection raises a real memory alarm on the broker and
+// checks that ClientState.Blocked flips, Assess refuses Stalled while blocked,
+// and the silence clock restarts at the unblock. It needs to run rabbitmqctl, so
+// it only runs when RABBITMQ_TEST_DOCKER_CONTAINER names the broker's container:
+//
+//	RABBITMQ_TEST_DOCKER_CONTAINER=grmq-health go test -run TestHealth_BlockedConnection .
+func TestHealth_BlockedConnection(t *testing.T) {
+	container := os.Getenv("RABBITMQ_TEST_DOCKER_CONTAINER")
+	if container == "" {
+		t.Skip("set RABBITMQ_TEST_DOCKER_CONTAINER to run the memory-alarm test")
+	}
+	f := newReconnectFixture(t)
+	f.publish(t, "warm-up")
+	f.rec.await(t, "warm-up", awaitWindow)
+
+	setWatermark := func(v string) {
+		t.Helper()
+		if out, err := exec.Command("docker", "exec", container, "rabbitmqctl", "set_vm_memory_high_watermark", v).CombinedOutput(); err != nil {
+			t.Fatalf("set_vm_memory_high_watermark %s: %v\n%s", v, err, out)
+		}
+	}
+	t.Cleanup(func() { setWatermark("0.4") })
+
+	// A blocked connection is only blocked once it publishes; keep it publishing.
+	stopPub := make(chan struct{})
+	var pubWG sync.WaitGroup
+	pubWG.Add(1)
+	go func() {
+		defer pubWG.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stopPub:
+				return
+			default:
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			_ = f.publisher.PublishWithDeliveryAssurance(ctx, f.exchange, f.routingKey, NewMessage([]byte("x")),
+				DeliveryOptions{MessageID: fmt.Sprintf("blocked-%d", i), Mandatory: true, Timeout: time.Second})
+			cancel()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	defer func() { close(stopPub); pubWG.Wait() }()
+
+	// Registered after the publisher's stop-and-wait defer, so it runs BEFORE it:
+	// a connection that is still blocked would never let that wait return, and the
+	// alarm would be left raised on the broker.
+	defer setWatermark("0.4")
+	setWatermark("0.0000001")
+	eventually(t, 30*time.Second, "ClientState.Blocked", func() bool { return f.client.State().Blocked })
+	cs := f.client.State()
+	if cs.BlockedReason == "" || cs.BlockedAt.IsZero() {
+		t.Fatalf("blocked state incomplete: %+v", cs)
+	}
+
+	// Evidence of a wedge forced on: only the Blocked guard stands in the way.
+	now := time.Now().Add(time.Hour)
+	h := f.publisher.DeliveryHealth()
+	h.FailuresSinceConfirm, h.LastConfirmAt, h.LastPublishAt = 10, time.Time{}, now.Add(-time.Second)
+	pol := DeliveryPolicy{StallAfter: time.Minute, MinConnectionAge: time.Nanosecond, MinFailures: 1}
+	if lvl, reason := h.Assess(DeliveryHealth{}, cs, pol, now); lvl == HealthStalled {
+		t.Fatalf("Stalled while the connection is blocked: %s", reason)
+	}
+	cs.Blocked = false // same snapshot unblocked: the evidence does stall
+	if lvl, _ := h.Assess(DeliveryHealth{}, cs, pol, now); lvl != HealthStalled {
+		t.Fatalf("test evidence is not stall evidence: %s", lvl)
+	}
+
+	setWatermark("0.4")
+	eventually(t, 30*time.Second, "ClientState to unblock", func() bool {
+		s := f.client.State()
+		return !s.Blocked && !s.UnblockedAt.IsZero()
+	})
 }

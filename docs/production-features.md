@@ -407,13 +407,17 @@ A "response" is any confirm frame (ack or nack) or return, because each proves t
 
 `HealthDegraded` is also returned when the confirm channel is dead or its readers are not both running, when the oldest pending message outlived its timeout (the timeout timer is not firing), when failures moved since `prev`, or when the Stalled evidence is complete except for a guard.
 
-One limit to know: a broker that blocks the connection (memory or disk alarm) also stops confirms while the client stays connected, and is indistinguishable here from a reader wedge.
+A connection the broker has blocked (memory or disk alarm, `ClientState.Blocked`) also stops confirms while the client stays connected, and a restart cannot cure it. A blocked connection is never trusted (never Stalled), and the silence clock restarts at `ClientState.UnblockedAt`.
+
+One verdict deliberately bypasses the guard: if you capped reconnection with `WithMaxReconnectAttempts(n)` (n > 0) and the cap was exhausted (`ClientState.GaveUp`) for at least `MinConnectionAge`, both `Assess` methods return Stalled, because the client will not recover by itself and a restart is the cure. This trades the restart-storm guard for your explicit cap: a broker outage longer than `n x ReconnectDelay` stalls every capped client. Leave the cap at 0 (unlimited, the default) if that is not wanted.
 
 &nbsp;
 
 ### Consumer verdict
 
-`ConsumerHealth.Assess` returns `HealthStalled` when `!Consuming || CancelledByBroker || ResubscribeFailures >= 5` has held for `StallAfter` (default 5m) **while the connection was healthy** (measured from the later of `NotConsumingSince` and the connection start), and the restart-storm guard holds now. A consumer is given a full `StallAfter` on a fresh connection to resubscribe before it is blamed.
+`ConsumerHealth.Assess` returns `HealthStalled` only for a consumer that cannot consume **at all**: no subscription is live (`Consuming` is false, whether cancelled by the broker or failing to resubscribe) for `StallAfter` (default 5m) **while the connection was healthy**, measured from the latest of `NotConsumingSince`, the connection start and the last unblock, with the restart-storm guard holding now. A consumer is given a full `StallAfter` on a fresh connection to resubscribe before it is blamed.
+
+A *partially* broken consumer (channel-per-worker mode, some workers consuming while one was cancelled by the broker or has failed to resubscribe 5 times) is at most `HealthDegraded`: it is still consuming, and a restart would interrupt the healthy workers to fix the sick one. Resubscribe failures are counted per worker (`ResubscribeFailures` is the maximum, `FailingSubscriptions` the number at the limit).
 
 **No deliveries for a long time is never a fault on its own.** An idle queue is legitimate; `LastDeliveryAt` is informational.
 

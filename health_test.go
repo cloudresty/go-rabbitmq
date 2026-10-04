@@ -60,6 +60,28 @@ func TestDeliveryHealthAssess(t *testing.T) {
 			mutate: func(_ *DeliveryHealth, cs *ClientState) { cs.ConnectedAt = ago(6 * time.Minute) },
 			pol:    DeliveryPolicy{MinConnectionAge: 10 * time.Minute}, want: HealthDegraded, reasonPart: "only 6m0s old",
 		},
+		{name: "guard: connection blocked by broker", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.Blocked, cs.BlockedReason, cs.BlockedAt = true, "low on memory", ago(time.Hour)
+		}, want: HealthDegraded, reasonPart: "blocked by broker: low on memory"},
+		{name: "unblock restarts the silence clock", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.BlockedAt, cs.UnblockedAt = ago(time.Hour), ago(time.Minute)
+		}, want: HealthOK},
+		{name: "unblocked long ago does not shield a wedge", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.BlockedAt, cs.UnblockedAt = ago(50*time.Minute), ago(40*time.Minute)
+		}, want: HealthStalled},
+		{name: "gave up reconnecting is stalled even though not connected", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Minute)
+		}, want: HealthStalled, reasonPart: "gave up reconnecting"},
+		{name: "gave up reconnecting even while another round is reconnecting", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.Connected, cs.Reconnecting, cs.GaveUp, cs.GaveUpAt = false, true, true, ago(10*time.Minute)
+		}, want: HealthStalled},
+		{name: "gave up only just now", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(30*time.Second)
+		}, want: HealthDegraded, reasonPart: "exhausted its reconnect attempts"},
+		{name: "gave up with delivery assurance disabled", mutate: func(h *DeliveryHealth, cs *ClientState) {
+			*h = DeliveryHealth{}
+			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Minute)
+		}, want: HealthStalled},
 		{name: "connection reset restarts the silence clock", mutate: func(_ *DeliveryHealth, cs *ClientState) { cs.ConnectedAt = ago(time.Minute) }, want: HealthOK},
 		{name: "new confirm channel restarts the silence clock", mutate: func(h *DeliveryHealth, _ *ClientState) { h.GenerationSince = ago(time.Minute) }, want: HealthOK},
 
@@ -168,20 +190,22 @@ func TestDeliveryAssessNeverStalledWithoutTrustedConnection(t *testing.T) {
 	stalledSeen := false
 	for _, connected := range []bool{false, true} {
 		for _, reconnecting := range []bool{false, true} {
-			for _, connAge := range []time.Duration{0, time.Second, time.Minute, 119 * time.Second, 2 * time.Minute, time.Hour} {
-				for _, readers := range []bool{false, true} {
-					for _, alive := range []bool{false, true} {
-						h := wedgedPublisher()
-						h.ReadersRunning, h.GenerationAlive = readers, alive
-						h.LastPublishAt = ago(10 * time.Second)
-						cs := ClientState{Connected: connected, Reconnecting: reconnecting, ConnectedAt: ago(connAge)}
-						lvl, reason := h.Assess(DeliveryHealth{}, cs, DeliveryPolicy{StallAfter: time.Minute}, healthNow)
-						if lvl != HealthStalled {
-							continue
-						}
-						stalledSeen = true
-						if !connected || reconnecting || connAge < defaultMinConnectionAge {
-							t.Fatalf("Stalled with connected=%t reconnecting=%t age=%s: %s", connected, reconnecting, connAge, reason)
+			for _, blocked := range []bool{false, true} {
+				for _, connAge := range []time.Duration{0, time.Second, time.Minute, 119 * time.Second, 2 * time.Minute, time.Hour} {
+					for _, readers := range []bool{false, true} {
+						for _, alive := range []bool{false, true} {
+							h := wedgedPublisher()
+							h.ReadersRunning, h.GenerationAlive = readers, alive
+							h.LastPublishAt = ago(10 * time.Second)
+							cs := ClientState{Connected: connected, Reconnecting: reconnecting, Blocked: blocked, ConnectedAt: ago(connAge)}
+							lvl, reason := h.Assess(DeliveryHealth{}, cs, DeliveryPolicy{StallAfter: time.Minute}, healthNow)
+							if lvl != HealthStalled {
+								continue
+							}
+							stalledSeen = true
+							if !connected || reconnecting || blocked || connAge < defaultMinConnectionAge {
+								t.Fatalf("Stalled with connected=%t reconnecting=%t blocked=%t age=%s: %s", connected, reconnecting, blocked, connAge, reason)
+							}
 						}
 					}
 				}
@@ -223,9 +247,39 @@ func TestConsumerHealthAssess(t *testing.T) {
 		{name: "resubscribe failures at the limit", mutate: func(h *ConsumerHealth, _ *ClientState) {
 			h.Consuming, h.NotConsumingSince, h.ResubscribeFailures = false, ago(10*time.Minute), 5
 		}, want: HealthStalled, reasonPart: "5 consecutive resubscribe failures"},
-		{name: "failures at limit while another worker still consumes", mutate: func(h *ConsumerHealth, _ *ClientState) {
-			h.ResubscribeFailures = 5 // Consuming stays true; held measured from SubscribedAt
+		{name: "1 of N failing >= 5 while the others consume is degraded, never stalled", mutate: func(h *ConsumerHealth, _ *ClientState) {
+			h.ActiveSubscriptions, h.ResubscribeFailures, h.FailingSubscriptions = 4, 7, 1
+		}, want: HealthDegraded, reasonPart: "partially broken"},
+		{name: "1 of N cancelled by broker is degraded, never stalled, however old the subscription", mutate: func(h *ConsumerHealth, _ *ClientState) {
+			h.ActiveSubscriptions, h.CancelledByBroker = 4, true
+			h.SubscribedAt = ago(100 * time.Hour)
+		}, want: HealthDegraded, reasonPart: "partially broken"},
+		{name: "all N cancelled: degraded until StallAfter has elapsed", mutate: func(h *ConsumerHealth, _ *ClientState) {
+			h.Consuming, h.ActiveSubscriptions, h.CancelledByBroker = false, 0, true
+			h.NotConsumingSince = ago(4 * time.Minute)
+		}, want: HealthDegraded, reasonPart: "stalled after 5m0s"},
+		{name: "all N cancelled: stalled once StallAfter has elapsed", mutate: func(h *ConsumerHealth, _ *ClientState) {
+			h.Consuming, h.ActiveSubscriptions, h.CancelledByBroker = false, 0, true
+			h.NotConsumingSince = ago(6 * time.Minute)
 		}, want: HealthStalled},
+		{name: "not consuming with a zero hold clock is never stalled", mutate: func(h *ConsumerHealth, _ *ClientState) {
+			h.Consuming, h.NotConsumingSince, h.SubscribedAt = false, time.Time{}, ago(100*time.Hour)
+		}, want: HealthDegraded},
+		{name: "guard: connection blocked", mutate: func(h *ConsumerHealth, cs *ClientState) {
+			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
+			cs.Blocked, cs.BlockedReason = true, "disk free space low"
+		}, want: HealthDegraded, reasonPart: "blocked by broker: disk free space low"},
+		{name: "unblock restarts the hold clock", mutate: func(h *ConsumerHealth, cs *ClientState) {
+			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
+			cs.UnblockedAt = ago(time.Minute)
+		}, want: HealthDegraded, reasonPart: "stalled after"},
+		{name: "gave up reconnecting is stalled", mutate: func(h *ConsumerHealth, cs *ClientState) {
+			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
+			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(5*time.Minute)
+		}, want: HealthStalled, reasonPart: "gave up"},
+		{name: "gave up only just now", mutate: func(h *ConsumerHealth, cs *ClientState) {
+			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Second)
+		}, want: HealthDegraded},
 		{name: "four failures alone are not broken", mutate: func(h *ConsumerHealth, _ *ClientState) { h.ResubscribeFailures = 4 }, want: HealthOK},
 
 		{name: "window not met", mutate: func(h *ConsumerHealth, _ *ClientState) {
@@ -273,17 +327,19 @@ func TestConsumerAssessNeverStalledWithoutTrustedConnection(t *testing.T) {
 	stalledSeen := false
 	for _, connected := range []bool{false, true} {
 		for _, reconnecting := range []bool{false, true} {
-			for _, connAge := range []time.Duration{0, time.Minute, 119 * time.Second, 10 * time.Minute, time.Hour} {
-				h := healthyConsumer()
-				h.Consuming, h.CancelledByBroker, h.NotConsumingSince = false, true, ago(2*time.Hour)
-				cs := ClientState{Connected: connected, Reconnecting: reconnecting, ConnectedAt: ago(connAge)}
-				lvl, reason := h.Assess(cs, ConsumerPolicy{StallAfter: time.Minute}, healthNow)
-				if lvl != HealthStalled {
-					continue
-				}
-				stalledSeen = true
-				if !connected || reconnecting || connAge < defaultMinConnectionAge {
-					t.Fatalf("Stalled with connected=%t reconnecting=%t age=%s: %s", connected, reconnecting, connAge, reason)
+			for _, blocked := range []bool{false, true} {
+				for _, connAge := range []time.Duration{0, time.Minute, 119 * time.Second, 10 * time.Minute, time.Hour} {
+					h := healthyConsumer()
+					h.Consuming, h.CancelledByBroker, h.NotConsumingSince = false, true, ago(2*time.Hour)
+					cs := ClientState{Connected: connected, Reconnecting: reconnecting, Blocked: blocked, ConnectedAt: ago(connAge)}
+					lvl, reason := h.Assess(cs, ConsumerPolicy{StallAfter: time.Minute}, healthNow)
+					if lvl != HealthStalled {
+						continue
+					}
+					stalledSeen = true
+					if !connected || reconnecting || blocked || connAge < defaultMinConnectionAge {
+						t.Fatalf("Stalled with connected=%t reconnecting=%t blocked=%t age=%s: %s", connected, reconnecting, blocked, connAge, reason)
+					}
 				}
 			}
 		}
@@ -305,10 +361,14 @@ func TestConsumerHealthStateMachine(t *testing.T) {
 			// its aggregation without a real client.
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			out := ConsumerHealth{Queue: h.queue, Stopped: h.stopped, NotConsumingSince: h.since, SubscribedAt: h.subAt, ResubscribeFailures: h.failures}
+			out := ConsumerHealth{Queue: h.queue, Stopped: h.stopped, NotConsumingSince: h.since, SubscribedAt: h.subAt}
 			for _, s := range h.subs {
 				out.Consuming = out.Consuming || s.active
 				out.CancelledByBroker = out.CancelledByBroker || s.cancelled
+				out.ResubscribeFailures = max(out.ResubscribeFailures, s.failures)
+				if s.failures >= consumerResubscribeFailureLimit {
+					out.FailingSubscriptions++
+				}
 			}
 			return out
 		}
@@ -381,4 +441,73 @@ func TestConsumerHealthStateMachine(t *testing.T) {
 			t.Fatalf("unclean end must not read as a stop: %+v", got)
 		}
 	})
+}
+
+// TestConsumerHealthPerSubscriptionFailures: each subscription (worker) owns its
+// failure streak. One worker's success must not zero another's streak, and one
+// worker's streak must not condemn a consumer whose other workers are consuming.
+func TestConsumerHealthPerSubscriptionFailures(t *testing.T) {
+	c := &Consumer{client: &Client{}}
+	c.health.begin("q")
+	c.health.subscribed(0, nil)
+	for range consumerResubscribeFailureLimit {
+		c.health.failed(1, errors.New("no channel"))
+	}
+	c.health.subscribed(2, nil) // another worker succeeding must not reset worker 1
+
+	h := c.Health()
+	if !h.Consuming || h.ActiveSubscriptions != 2 || h.ResubscribeFailures != 5 || h.FailingSubscriptions != 1 {
+		t.Fatalf("snapshot: %+v", h)
+	}
+	cs := healthyClient()
+	cs.ConnectedAt = healthNow.Add(-24 * time.Hour)
+	h.SubscribedAt = healthNow.Add(-24 * time.Hour)
+	if lvl, reason := h.Assess(cs, ConsumerPolicy{}, healthNow); lvl != HealthDegraded {
+		t.Fatalf("1-of-3 failing: %s (%s), want degraded", lvl, reason)
+	}
+
+	c.health.subscribed(1, nil) // worker 1 recovers: its own streak resets
+	if h := c.Health(); h.ResubscribeFailures != 0 || h.FailingSubscriptions != 0 {
+		t.Fatalf("after recovery: %+v", h)
+	}
+}
+
+// TestClientGivesUpAfterMaxReconnectAttempts drives the real reconnect loop
+// against a dead port with a capped attempt count.
+func TestClientGivesUpAfterMaxReconnectAttempts(t *testing.T) {
+	c := &Client{
+		closeCh: make(chan struct{}),
+		config: &clientConfig{
+			URL:                  "amqp://guest:guest@127.0.0.1:1/",
+			DialTimeout:          200 * time.Millisecond,
+			ReconnectDelay:       time.Millisecond,
+			MaxReconnectAttempts: 3,
+			Logger:               NewNopLogger(),
+			Metrics:              NewNopMetrics(),
+		},
+	}
+	c.handleReconnection()
+
+	cs := c.State()
+	if !cs.GaveUp || cs.GaveUpAt.IsZero() || cs.Reconnecting || cs.Connected || cs.LastError == "" {
+		t.Fatalf("state after exhausting attempts: %+v", cs)
+	}
+
+	// A second exhausted round (the monitor re-enters) keeps the original time.
+	first := cs.GaveUpAt
+	c.handleReconnection()
+	if got := c.State().GaveUpAt; !got.Equal(first) {
+		t.Fatalf("GaveUpAt moved from %v to %v", first, got)
+	}
+
+	late := first.Add(5 * time.Minute)
+	if lvl, reason := (DeliveryHealth{}).Assess(DeliveryHealth{}, c.State(), DeliveryPolicy{}, late); lvl != HealthStalled {
+		t.Fatalf("publisher Assess = %s (%s), want stalled", lvl, reason)
+	}
+	if lvl, reason := (ConsumerHealth{}).Assess(c.State(), ConsumerPolicy{}, late); lvl != HealthStalled {
+		t.Fatalf("consumer Assess = %s (%s), want stalled", lvl, reason)
+	}
+	if lvl, _ := (ConsumerHealth{}).Assess(c.State(), ConsumerPolicy{}, first.Add(time.Second)); lvl == HealthStalled {
+		t.Fatal("stalled the moment the client gave up")
+	}
 }
