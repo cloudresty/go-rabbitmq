@@ -13,6 +13,7 @@ This document covers all production-ready features designed for high-availabilit
 - [Auto-Reconnection](#auto-reconnection)
 - [Multi-Host Failover](#multi-host-failover)
 - [Health Monitoring](#health-monitoring)
+- [Functional Health](#functional-health)
 - [Topology Auto-Healing](#topology-auto-healing)
 - [Connection Pooling](#connection-pooling)
 - [Graceful Shutdown](#graceful-shutdown)
@@ -334,6 +335,89 @@ func main() {
 - **Cluster Status**: Health status across multiple cluster nodes
 - **Timeout Protection**: Configurable timeouts prevent hanging health checks
 - **Integration Ready**: Easy integration with monitoring systems and alerting
+
+&nbsp;
+
+🔝 [back to top](#production-features)
+
+&nbsp;
+
+## Functional Health
+
+`Ping` proves a connection exists. It cannot tell you that the publisher's confirms stopped arriving, or that the broker silently cancelled a consumer, and in both cases the process looks perfectly healthy while doing no work. The functional-health API answers "is this client doing its job?" from state the library already holds. Every call is a pure in-memory read: nothing touches the broker, nothing blocks on a reconnect, and all of them are safe at any frequency (a probe handler can call them directly).
+
+&nbsp;
+
+### The API
+
+```go
+cs := client.State()               // ClientState: Connected, Reconnecting, ConnectedAt, LastDisconnectAt, Reconnects, LastError
+dh := publisher.DeliveryHealth()   // DeliveryHealth (zero value unless WithDeliveryAssurance)
+ch := consumer.Health()            // ConsumerHealth (one Consumer consumes one queue at a time)
+
+// Pure verdicts; the clock is a parameter, so they are table-testable.
+level, reason := dh.Assess(prevDH, cs, rabbitmq.DeliveryPolicy{}, time.Now())
+level, reason  = ch.Assess(cs, rabbitmq.ConsumerPolicy{}, time.Now())
+```
+
+`level` is a `HealthLevel`: `HealthOK`, `HealthDegraded` or `HealthStalled` (`String()` gives `ok`, `degraded`, `stalled`). `reason` always carries the numbers behind the verdict. `prev` is the snapshot from your previous evaluation (zero value on the first call); it only drives the "failures moved since last check" Degraded signal.
+
+Alongside the verdicts, a publisher now replaces a dead confirm channel proactively: a small keeper goroutine per delivery-assurance publisher waits for the channel to die, waits for the client to be connected (it never refreshes mid-reconnect), refreshes with exponential backoff, and exits on `Close`. An idle publisher therefore never sits on a dead channel until its next publish. The refresh inside the publish path remains as a fallback.
+
+&nbsp;
+
+### Recommended service mapping
+
+| Level | Meaning | Suggested use |
+| :-- | :-- | :-- |
+| `HealthStalled` | A functional wedge, provable while the connection is healthy | Liveness FAIL candidate (a restart can cure it) |
+| `HealthDegraded` | Something looks wrong but is not provably a wedge | Readiness detail line, dashboards, alerts; **never** a restart |
+| `HealthOK` | Nothing wrong that these signals can see | - |
+
+Evaluate on a background interval (for example every 10s), cache the result, and have the probe handler read the cache. Keep the previous `DeliveryHealth` between evaluations. Hold a Stalled verdict through your own debounce (kubelet `failureThreshold`, plus a per-pod jitter) before it kills anything.
+
+```go
+func evaluate(c *rabbitmq.Client, p *rabbitmq.Publisher, prev rabbitmq.DeliveryHealth) (rabbitmq.HealthLevel, string, rabbitmq.DeliveryHealth) {
+    cur := p.DeliveryHealth()
+    level, reason := cur.Assess(prev, c.State(), rabbitmq.DeliveryPolicy{}, time.Now())
+    return level, reason, cur
+}
+```
+
+&nbsp;
+
+### The restart-storm guard
+
+A restart cures an in-process wedge. It never cures a broker outage. When a broker rolls, every publisher in the fleet sees confirms stop and every consumer lose its subscription at the same moment; a verdict that fired then would restart every pod into the same outage and make it worse.
+
+So **`HealthStalled` is never returned unless `ClientState` says the client is connected, is not reconnecting, and has been connected for at least `MinConnectionAge` (default 2m)**. Otherwise the same evidence yields `HealthDegraded` with the guard that held it back in the reason. This guard is shared by both `Assess` methods and is not configurable off.
+
+&nbsp;
+
+### Publisher verdict
+
+`DeliveryHealth.Assess` returns `HealthStalled` only when all of these hold:
+
+- the restart-storm guard above;
+- at least `MinFailures` (default 3) confirm timeouts or orphans on the current confirm channel with no broker response in between;
+- publishing is ongoing (the last publish is within `StallAfter` and after the last response);
+- the broker has been silent for `StallAfter` (default `max(3 x confirm timeout, 5m)`), measured from the latest of the last response, the start of the current confirm channel, the start of the current connection and the publisher's creation. Failures that predate a reconnect never count against the new connection.
+
+A "response" is any confirm frame (ack or nack) or return, because each proves the readers are alive and the broker is answering. **Some confirms flowing while most time out is deliberately not Stalled**: a reader wedge is all-or-nothing, so any response inside the window shows the problem is the broker or the network, which a restart does not cure. That case is `HealthDegraded`, with the timeout and confirm counts in the reason.
+
+`HealthDegraded` is also returned when the confirm channel is dead or its readers are not both running, when the oldest pending message outlived its timeout (the timeout timer is not firing), when failures moved since `prev`, or when the Stalled evidence is complete except for a guard.
+
+One limit to know: a broker that blocks the connection (memory or disk alarm) also stops confirms while the client stays connected, and is indistinguishable here from a reader wedge.
+
+&nbsp;
+
+### Consumer verdict
+
+`ConsumerHealth.Assess` returns `HealthStalled` when `!Consuming || CancelledByBroker || ResubscribeFailures >= 5` has held for `StallAfter` (default 5m) **while the connection was healthy** (measured from the later of `NotConsumingSince` and the connection start), and the restart-storm guard holds now. A consumer is given a full `StallAfter` on a fresh connection to resubscribe before it is blamed.
+
+**No deliveries for a long time is never a fault on its own.** An idle queue is legitimate; `LastDeliveryAt` is informational.
+
+The consume loops (shared-channel and channel-per-worker alike, and `ConsumeBatch`) register `NotifyCancel`, so a broker-side cancel, for example the queue being deleted, sets `CancelledByBroker` and `Consuming=false` even though the channel and connection stay open. A consumer that never started, or whose `Consume` has returned on a clean stop, is `HealthDegraded`, not Stalled.
 
 &nbsp;
 
