@@ -269,10 +269,10 @@ func TestConsumerHealthAssess(t *testing.T) {
 			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
 			cs.Blocked, cs.BlockedReason = true, "disk free space low"
 		}, want: HealthDegraded, reasonPart: "blocked by broker: disk free space low"},
-		{name: "unblock restarts the hold clock", mutate: func(h *ConsumerHealth, cs *ClientState) {
+		{name: "unblock does not restart the consumer hold clock (blocking throttles publishers only)", mutate: func(h *ConsumerHealth, cs *ClientState) {
 			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
-			cs.UnblockedAt = ago(time.Minute)
-		}, want: HealthDegraded, reasonPart: "stalled after"},
+			cs.BlockedAt, cs.UnblockedAt = ago(30*time.Minute), ago(time.Minute)
+		}, want: HealthStalled},
 		{name: "gave up reconnecting is degraded, never stalled", mutate: func(h *ConsumerHealth, cs *ClientState) {
 			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
 			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(5*time.Minute)

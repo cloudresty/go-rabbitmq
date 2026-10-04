@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -459,13 +461,43 @@ func TestHealth_BlockedConnection(t *testing.T) {
 	f.publish(t, "warm-up")
 	f.rec.await(t, "warm-up", awaitWindow)
 
-	setWatermark := func(v string) {
-		t.Helper()
-		if out, err := exec.Command("docker", "exec", container, "rabbitmqctl", "set_vm_memory_high_watermark", v).CombinedOutput(); err != nil {
-			t.Fatalf("set_vm_memory_high_watermark %s: %v\n%s", v, err, out)
-		}
+	// docker runs rabbitmqctl; every call is bounded.
+	docker := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "docker", append([]string{"exec", container}, args...)...).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
 	}
-	t.Cleanup(func() { setWatermark("0.4") })
+	setWatermark := func(v string) error {
+		var err error
+		for range 3 { // restore must survive a flaky exec
+			var out string
+			if out, err = docker("rabbitmqctl", "set_vm_memory_high_watermark", v); err == nil {
+				return nil
+			}
+			err = fmt.Errorf("set_vm_memory_high_watermark %s: %w\n%s", v, err, out)
+			time.Sleep(time.Second)
+		}
+		return err
+	}
+
+	// Remember the broker's own watermark (4.x defaults to 0.6) and restore THAT.
+	original, err := docker("rabbitmqctl", "eval", "vm_memory_monitor:get_vm_memory_high_watermark().")
+	if _, perr := strconv.ParseFloat(original, 64); err != nil || perr != nil {
+		t.Skipf("cannot read the broker's current memory watermark (%q, %v, %v); refusing to alter it", original, err, perr)
+	}
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		if err := setWatermark(original); err != nil {
+			t.Errorf("RESTORE THE BROKER WATERMARK BY HAND (rabbitmqctl set_vm_memory_high_watermark %s): %v", original, err)
+			return
+		}
+		restored = true
+	}
+	t.Cleanup(restore) // second line of defence: runs even if the test ends early
 
 	// A blocked connection is only blocked once it publishes; keep it publishing.
 	stopPub := make(chan struct{})
@@ -486,13 +518,24 @@ func TestHealth_BlockedConnection(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
-	defer func() { close(stopPub); pubWG.Wait() }()
+	defer func() {
+		close(stopPub)
+		done := make(chan struct{})
+		go func() { pubWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Log("publisher goroutine still stuck in a blocked write; moving on")
+		}
+	}()
 
 	// Registered after the publisher's stop-and-wait defer, so it runs BEFORE it:
 	// a connection that is still blocked would never let that wait return, and the
 	// alarm would be left raised on the broker.
-	defer setWatermark("0.4")
-	setWatermark("0.0000001")
+	defer restore()
+	if err := setWatermark("0.0000001"); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, 30*time.Second, "ClientState.Blocked", func() bool { return f.client.State().Blocked })
 	cs := f.client.State()
 	if cs.BlockedReason == "" || cs.BlockedAt.IsZero() {
@@ -512,7 +555,7 @@ func TestHealth_BlockedConnection(t *testing.T) {
 		t.Fatalf("test evidence is not stall evidence: %s", lvl)
 	}
 
-	setWatermark("0.4")
+	restore()
 	eventually(t, 30*time.Second, "ClientState to unblock", func() bool {
 		s := f.client.State()
 		return !s.Blocked && !s.UnblockedAt.IsZero()

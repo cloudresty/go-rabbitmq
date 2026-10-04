@@ -1601,7 +1601,12 @@ func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlock
 	} else {
 		p.refreshMu.Lock()
 	}
-	defer p.refreshMu.Unlock()
+	refreshHeld := true
+	defer func() {
+		if refreshHeld {
+			p.refreshMu.Unlock()
+		}
+	}()
 	if p.closed.Load() {
 		return errPublisherClosed
 	}
@@ -1613,7 +1618,6 @@ func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlock
 	// on the client's connection lock, which the reconnect loop holds for the
 	// whole outage; holding publishMu across that wait would stall every publish
 	// and Close for as long as the broker is away.
-	p.refreshOpens.Add(1)
 	var (
 		newCh *amqp.Channel
 		err   error
@@ -1629,6 +1633,7 @@ func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlock
 	if err != nil {
 		return fmt.Errorf("failed to get new channel: %w", err)
 	}
+	p.refreshOpens.Add(1)
 	if p.closed.Load() {
 		_ = newCh.Close()
 		return errPublisherClosed
@@ -1656,10 +1661,12 @@ func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlock
 
 	p.installConfirmGenerationLocked(newCh)
 	p.publishMu.Unlock()
+	p.refreshMu.Unlock()
+	refreshHeld = false
 
 	// The old channel is normally closed already (that is why we are here); if
 	// it is not, close it so its readers exit and its orphans are settled. Done
-	// outside the lock: closing is an RPC.
+	// outside every lock: closing is an RPC.
 	p.closeConfirmChannel(old)
 
 	p.client.config.Logger.Info("Confirm channel refreshed successfully",

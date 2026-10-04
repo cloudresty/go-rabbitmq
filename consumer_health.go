@@ -319,10 +319,10 @@ func (pol ConsumerPolicy) withDefaults() ConsumerPolicy {
 // HealthStalled is reserved for a consumer that cannot consume AT ALL: no
 // subscription is live (Consuming is false). That state must have held for
 // pol.StallAfter while the connection was healthy, measured from the latest of
-// NotConsumingSince, cs.ConnectedAt and cs.UnblockedAt, and the restart-storm
-// guard must hold now (connected, not reconnecting, not blocked, connection at
+// NotConsumingSince and cs.ConnectedAt, and the restart-storm
+// guard must hold now (connected, not reconnecting, not blocked (blocking throttles publishers, so an unblock does not restart this clock), connection at
 // least pol.MinConnectionAge old). A consumer therefore gets a full StallAfter on
-// a fresh connection, or after an unblock, to resubscribe before it is blamed.
+// a fresh connection to resubscribe before it is blamed.
 // There is no fallback clock: a missing NotConsumingSince never means "since
 // SubscribedAt".
 //
@@ -365,7 +365,7 @@ func (h ConsumerHealth) Assess(cs ClientState, pol ConsumerPolicy, now time.Time
 			h.Queue, h.InFlight, ageString(h.LastDeliveryAt, now), ageString(h.LastAckAt, now))
 	}
 
-	held := now.Sub(latestOf(h.NotConsumingSince, cs.ConnectedAt, cs.UnblockedAt))
+	held := now.Sub(latestOf(h.NotConsumingSince, cs.ConnectedAt))
 	if ok, why := connectionTrusted(cs, pol.MinConnectionAge, now); !ok {
 		return HealthDegraded, fmt.Sprintf("%s cannot consume; not declared stalled: %s", detail, why)
 	}

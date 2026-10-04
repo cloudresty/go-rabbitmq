@@ -415,7 +415,7 @@ A client that exhausted a capped `WithMaxReconnectAttempts(n)` (`ClientState.Gav
 
 ### Consumer verdict
 
-`ConsumerHealth.Assess` returns `HealthStalled` only for a consumer that cannot consume **at all**: no subscription is live (`Consuming` is false, whether cancelled by the broker or failing to resubscribe) for `StallAfter` (default 5m) **while the connection was healthy**, measured from the latest of `NotConsumingSince`, the connection start and the last unblock, with the restart-storm guard holding now. A consumer is given a full `StallAfter` on a fresh connection to resubscribe before it is blamed.
+`ConsumerHealth.Assess` returns `HealthStalled` only for a consumer that cannot consume **at all**: no subscription is live (`Consuming` is false, whether cancelled by the broker or failing to resubscribe) for `StallAfter` (default 5m) **while the connection was healthy**, measured from the later of `NotConsumingSince` and the connection start (a block throttles publishers, not consumers, so an unblock does not restart it), with the restart-storm guard holding now. A consumer is given a full `StallAfter` on a fresh connection to resubscribe before it is blamed.
 
 A *partially* broken consumer (channel-per-worker mode, some workers consuming while one was cancelled by the broker or has failed to resubscribe 5 times) is at most `HealthDegraded`: it is still consuming, and a restart would interrupt the healthy workers to fix the sick one. Resubscribe failures are counted per worker (`ResubscribeFailures` is the maximum, `FailingSubscriptions` the number at the limit).
 
