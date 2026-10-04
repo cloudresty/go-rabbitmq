@@ -74,6 +74,11 @@ type Consumer struct {
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	mu        sync.RWMutex
+
+	// health backs Health(); see consumer_health.go.
+	health consumerHealth
+	// cancelWatched is the shared channel NotifyCancel is already registered on.
+	cancelWatched *amqp.Channel
 }
 
 // consumerConfig holds consumer-specific configuration
@@ -161,6 +166,9 @@ type Delivery struct {
 	// settled guards against double-acknowledgment. A nil settled acts as a
 	// legacy passthrough gate that always allows settlement (see trySettle).
 	settled *atomic.Bool
+
+	// health, when set by a Consumer, is told about successful acknowledgments.
+	health *consumerHealth
 }
 
 // NewDelivery wraps an amqp.Delivery in a *Delivery with an active settle
@@ -452,7 +460,9 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler MessageHan
 	c.consuming = true
 	c.mu.Unlock()
 
+	c.health.begin(queue)
 	defer func() {
+		c.health.end(true)
 		c.mu.Lock()
 		c.consuming = false
 		c.mu.Unlock()
@@ -492,6 +502,7 @@ func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, h
 
 		// Ensure we have a valid channel
 		if err := c.ensureValidChannel(); err != nil {
+			c.health.failed(0, err)
 			c.client.config.Logger.Error("Failed to ensure valid channel, retrying...",
 				"queue", queue,
 				"error", err.Error())
@@ -506,6 +517,12 @@ func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, h
 			}
 		}
 
+		// Listen for a broker-side cancel before subscribing, once per channel.
+		if c.cancelWatched != c.ch {
+			c.watchCancel(c.ch, 0)
+			c.cancelWatched = c.ch
+		}
+
 		// Start consuming
 		deliveries, err := c.ch.Consume(
 			queue,
@@ -517,6 +534,7 @@ func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, h
 			nil, // arguments
 		)
 		if err != nil {
+			c.health.failed(0, err)
 			c.client.config.Logger.Error("Failed to start consuming, retrying...",
 				"queue", queue,
 				"error", err.Error())
@@ -532,6 +550,7 @@ func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, h
 			}
 		}
 
+		c.health.subscribed(0, c.ch)
 		c.client.config.Logger.Info("Started consuming messages",
 			"queue", queue,
 			"concurrency", c.config.Concurrency)
@@ -566,6 +585,7 @@ func (c *Consumer) consumeWithSharedChannel(ctx context.Context, queue string, h
 			c.wg.Wait()
 			return nil
 		case <-channelClosed:
+			c.health.closed(0)
 			c.client.config.Logger.Warn("Consumer channel closed, reconnecting...",
 				"queue", queue)
 			// Stop current workers
@@ -698,6 +718,7 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 		// Create a dedicated channel for this worker
 		ch, err := c.client.getChannel()
 		if err != nil {
+			c.health.failed(workerID, err)
 			c.client.config.Logger.Error("Worker failed to get channel, retrying...",
 				"queue", queue,
 				"worker_id", workerID,
@@ -717,6 +738,7 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 		// Set QoS on this worker's channel
 		if c.config.PrefetchCount > 0 || c.config.PrefetchSize > 0 {
 			if err := ch.Qos(c.config.PrefetchCount, c.config.PrefetchSize, false); err != nil {
+				c.health.failed(workerID, err)
 				c.client.config.Logger.Error("Worker failed to set QoS, retrying...",
 					"queue", queue,
 					"worker_id", workerID,
@@ -735,6 +757,10 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 			}
 		}
 
+		// Listen for a broker-side cancel before subscribing. It ends with ch,
+		// which this worker always closes.
+		c.watchCancel(ch, workerID)
+
 		// Start consuming on this worker's channel
 		deliveries, err := ch.Consume(
 			queue,
@@ -746,6 +772,7 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 			nil,
 		)
 		if err != nil {
+			c.health.failed(workerID, err)
 			c.client.config.Logger.Error("Worker failed to start consuming, retrying...",
 				"queue", queue,
 				"worker_id", workerID,
@@ -763,6 +790,7 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 			}
 		}
 
+		c.health.subscribed(workerID, ch)
 		c.client.config.Logger.Debug("Worker started with dedicated channel",
 			"queue", queue,
 			"worker_id", workerID,
@@ -770,6 +798,7 @@ func (c *Consumer) workerWithOwnChannel(ctx context.Context, queue string, handl
 
 		// Process messages until channel closes or stop signal
 		channelOK := c.processDeliveriesWithOwnChannel(ctx, queue, handler, deliveries, config, workerID)
+		c.health.closed(workerID)
 
 		// Clean up channel
 		_ = ch.Close()
@@ -816,9 +845,13 @@ func (c *Consumer) processDeliveriesWithOwnChannel(ctx context.Context, queue st
 func (c *Consumer) processMessage(ctx context.Context, queue string, handler MessageHandler, delivery *amqp.Delivery, config *consumeConfig) {
 	// Record that we received a message
 	c.client.config.Metrics.RecordMessageReceived(queue)
+	c.health.delivered(c.config.AutoAck)
+	c.health.inFlight.Add(1)
+	defer c.health.inFlight.Add(-1)
 
 	// Create our enhanced delivery wrapper
 	enhancedDelivery := NewDelivery(*delivery)
+	enhancedDelivery.health = &c.health
 
 	// Apply decryption if configured
 	if c.config.Encryptor != nil {
@@ -1189,7 +1222,11 @@ func (d *Delivery) Ack() error {
 	if !d.trySettle() {
 		return nil
 	}
-	return d.Delivery.Ack(false)
+	err := d.Delivery.Ack(false)
+	if err == nil && d.health != nil {
+		d.health.acked()
+	}
+	return err
 }
 
 // Nack negatively acknowledges the message with requeue option.
@@ -1349,7 +1386,10 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 	c.consuming = true
 	c.mu.Unlock()
 
+	c.health.begin(queue)
+	cleanExit := false
 	defer func() {
+		c.health.end(cleanExit)
 		c.mu.Lock()
 		c.consuming = false
 		c.mu.Unlock()
@@ -1366,6 +1406,7 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 	// Get channel
 	ch, err := c.client.getChannel()
 	if err != nil {
+		c.health.failed(0, err)
 		span.SetStatus(SpanStatusError, err.Error())
 		return fmt.Errorf("failed to get channel: %w", err)
 	}
@@ -1376,11 +1417,13 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 		prefetchCount = c.config.PrefetchCount
 	}
 	if err := ch.Qos(prefetchCount, c.config.PrefetchSize, false); err != nil {
+		c.health.failed(0, err)
 		span.SetStatus(SpanStatusError, err.Error())
 		return fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	// Start consuming
+	// Start consuming (cancel listener first; it ends with ch)
+	c.watchCancel(ch, 0)
 	deliveries, err := ch.Consume(
 		queue,
 		c.config.ConsumerTag,
@@ -1391,9 +1434,11 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 		nil,
 	)
 	if err != nil {
+		c.health.failed(0, err)
 		span.SetStatus(SpanStatusError, err.Error())
 		return fmt.Errorf("failed to start consuming: %w", err)
 	}
+	c.health.subscribed(0, ch)
 
 	c.client.config.Logger.Info("Started batch consumption",
 		"queue", queue,
@@ -1413,6 +1458,7 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
 			}
 			span.SetStatus(SpanStatusOK, "context cancelled")
+			cleanExit = true
 			return ctx.Err()
 
 		case <-c.stopCh:
@@ -1421,11 +1467,13 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 				c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
 			}
 			span.SetStatus(SpanStatusOK, "stopped")
+			cleanExit = true
 			return nil
 
 		case delivery, ok := <-deliveries:
 			if !ok {
 				// Channel closed, process remaining batch
+				c.health.closed(0)
 				if len(batch) > 0 {
 					c.processBatch(ctx, queue, handler, batch, consumeConfig, config.AutoAck)
 				}
@@ -1434,7 +1482,9 @@ func (c *Consumer) ConsumeBatch(ctx context.Context, queue string, handler Batch
 			}
 
 			// Create enhanced delivery
+			c.health.delivered(config.AutoAck)
 			enhancedDelivery := NewDelivery(delivery)
+			enhancedDelivery.health = &c.health
 
 			// Apply decompression if configured
 			if c.config.Compressor != nil {
@@ -1491,6 +1541,9 @@ func (c *Consumer) processBatch(ctx context.Context, queue string, handler Batch
 	if len(batch) == 0 {
 		return
 	}
+
+	c.health.inFlight.Add(int64(len(batch)))
+	defer c.health.inFlight.Add(-int64(len(batch)))
 
 	start := time.Now()
 
