@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -67,6 +68,26 @@ type ClientState struct {
 	// Reconnects counts successful reconnections (not the initial connect).
 	Reconnects uint64
 
+	// Blocked is true while the broker has blocked this connection with
+	// connection.blocked (a memory or disk alarm). Publishes and confirms stall
+	// while it is set, and a restart cannot cure that.
+	Blocked bool
+
+	// BlockedReason is the broker's reason for the most recent block.
+	BlockedReason string
+
+	// BlockedAt is when the connection was last blocked; UnblockedAt is when it
+	// was last unblocked. Both are zero if that never happened on this client.
+	BlockedAt, UnblockedAt time.Time
+
+	// GaveUp is true once the configured MaxReconnectAttempts were exhausted
+	// without a successful connect, and stays true until one succeeds. It is only
+	// ever set when MaxReconnectAttempts > 0: an operator opted in to a cap.
+	GaveUp bool
+
+	// GaveUpAt is when GaveUp first became true (zero when it is false).
+	GaveUpAt time.Time
+
 	// LastError is the most recent connection failure (a close reason or a failed
 	// dial). It is not cleared on recovery; read it with Connected.
 	LastError string
@@ -84,12 +105,35 @@ func (c *Client) State() ClientState {
 // markConnected records conn as the live connection and watches it for closure.
 func (c *Client) markConnected(conn *amqp.Connection) {
 	closes := conn.NotifyClose(make(chan *amqp.Error, 1))
+	blocked := conn.NotifyBlocked(make(chan amqp.Blocking, 4))
 
 	c.stateMu.Lock()
 	c.state.Connected = true
 	c.state.ConnectedAt = time.Now()
+	c.state.Blocked = false
+	c.state.GaveUp = false
+	c.state.GaveUpAt = time.Time{}
 	c.stateConn = conn
 	c.stateMu.Unlock()
+
+	// connection.blocked / connection.unblocked notifications. amqp091 closes the
+	// listener when the connection shuts down, which ends this goroutine.
+	go func() {
+		for b := range blocked {
+			c.stateMu.Lock()
+			if c.stateConn == conn {
+				if b.Active {
+					c.state.Blocked = true
+					c.state.BlockedReason = b.Reason
+					c.state.BlockedAt = time.Now()
+				} else {
+					c.state.Blocked = false
+					c.state.UnblockedAt = time.Now()
+				}
+			}
+			c.stateMu.Unlock()
+		}
+	}()
 
 	// amqp091 delivers the close reason (if any) and then closes the channel, so
 	// this goroutine always ends with the connection.
@@ -102,6 +146,7 @@ func (c *Client) markConnected(conn *amqp.Connection) {
 			return
 		}
 		c.state.Connected = false
+		c.state.Blocked = false
 		c.state.LastDisconnectAt = time.Now()
 		if closeErr != nil {
 			c.state.LastError = closeErr.Error()
@@ -624,6 +669,12 @@ func (c *Client) handleReconnection() {
 		}
 
 		if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
+			c.stateMu.Lock()
+			if !c.state.GaveUp {
+				c.state.GaveUp = true
+				c.state.GaveUpAt = time.Now()
+			}
+			c.stateMu.Unlock()
 			c.config.Logger.Error("Max reconnection attempts reached",
 				"connection_name", c.config.ConnectionName,
 				"max_attempts", c.config.MaxReconnectAttempts)
@@ -672,6 +723,26 @@ func (c *Client) handleReconnection() {
 
 		return
 	}
+}
+
+// errConnectionBusy is returned by tryGetChannel while the connection lock is
+// held (a dial or reconnect is in progress).
+var errConnectionBusy = errors.New("connection busy")
+
+// tryGetChannel is getChannel that never waits for the connection lock.
+func (c *Client) tryGetChannel() (*amqp.Channel, error) {
+	if !c.connMu.TryRLock() {
+		return nil, errConnectionBusy
+	}
+	defer c.connMu.RUnlock()
+
+	if c.closed {
+		return nil, fmt.Errorf("client is closed")
+	}
+	if c.conn == nil || c.conn.IsClosed() {
+		return nil, fmt.Errorf("connection is not available")
+	}
+	return c.conn.Channel()
 }
 
 // getChannel returns a new channel from the connection
