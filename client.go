@@ -21,6 +21,16 @@ type Client struct {
 	closed       bool
 	reconnecting bool
 	reconnectMu  sync.RWMutex
+
+	// state backs State(). It has its own small mutex, never held across I/O,
+	// because reconnectMu is held for the whole of a reconnect loop and connMu
+	// for the duration of a dial: a health read must never queue behind either.
+	stateMu sync.Mutex
+	state   ClientState
+	// stateConn is the connection state.Connected currently describes, so the
+	// close watcher of a superseded connection cannot flip a newer one.
+	stateConn *amqp.Connection
+
 	// Services (lazy-initialized)
 	admin     *AdminService
 	adminOnce sync.Once
@@ -33,6 +43,83 @@ type Client struct {
 	// Shutdown handling
 	closeCh chan struct{}
 	closeWg sync.WaitGroup
+}
+
+// ClientState is a point-in-time, in-memory snapshot of the client's connection
+// health, returned by Client.State. It is the dependency precondition of the
+// Assess methods: a functional verdict such as "stalled" is only meaningful
+// while the connection itself is healthy.
+type ClientState struct {
+	// Connected is true while the client holds an open connection. It turns
+	// false the moment the connection closes, not when the monitor next polls.
+	Connected bool
+
+	// Reconnecting is true while the reconnect loop is running.
+	Reconnecting bool
+
+	// ConnectedAt is when the current (or, if disconnected, the most recent)
+	// connection was established. Zero if never connected.
+	ConnectedAt time.Time
+
+	// LastDisconnectAt is when the connection was last lost. Zero if it never was.
+	LastDisconnectAt time.Time
+
+	// Reconnects counts successful reconnections (not the initial connect).
+	Reconnects uint64
+
+	// LastError is the most recent connection failure (a close reason or a failed
+	// dial). It is not cleared on recovery; read it with Connected.
+	LastError string
+}
+
+// State returns a snapshot of the client's connection state. It is a pure
+// in-memory read: it never touches the broker, never blocks on a reconnect in
+// progress, and is safe to call at any frequency from any goroutine.
+func (c *Client) State() ClientState {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.state
+}
+
+// markConnected records conn as the live connection and watches it for closure.
+func (c *Client) markConnected(conn *amqp.Connection) {
+	closes := conn.NotifyClose(make(chan *amqp.Error, 1))
+
+	c.stateMu.Lock()
+	c.state.Connected = true
+	c.state.ConnectedAt = time.Now()
+	c.stateConn = conn
+	c.stateMu.Unlock()
+
+	// amqp091 delivers the close reason (if any) and then closes the channel, so
+	// this goroutine always ends with the connection.
+	go func() {
+		closeErr := <-closes
+
+		c.stateMu.Lock()
+		defer c.stateMu.Unlock()
+		if c.stateConn != conn {
+			return
+		}
+		c.state.Connected = false
+		c.state.LastDisconnectAt = time.Now()
+		if closeErr != nil {
+			c.state.LastError = closeErr.Error()
+		}
+	}()
+}
+
+// recordConnectError remembers the latest failed connection attempt.
+func (c *Client) recordConnectError(err error) {
+	c.stateMu.Lock()
+	c.state.LastError = err.Error()
+	c.stateMu.Unlock()
+}
+
+func (c *Client) setReconnecting(v bool) {
+	c.stateMu.Lock()
+	c.state.Reconnecting = v
+	c.stateMu.Unlock()
 }
 
 // clientConfig holds all configuration for the client
@@ -452,6 +539,7 @@ func (c *Client) connect() error {
 		}
 
 		c.conn = conn
+		c.markConnected(conn)
 		totalDuration := time.Since(start)
 		c.config.Metrics.RecordConnectionAttempt(true, totalDuration)
 
@@ -465,7 +553,9 @@ func (c *Client) connect() error {
 	// All connection attempts failed
 	totalDuration := time.Since(start)
 	c.config.Metrics.RecordConnectionAttempt(false, totalDuration)
-	return fmt.Errorf("failed to connect to any RabbitMQ host after %d attempts, last error: %w", len(urls), lastErr)
+	err := fmt.Errorf("failed to connect to any RabbitMQ host after %d attempts, last error: %w", len(urls), lastErr)
+	c.recordConnectError(err)
+	return err
 }
 
 // getConnectionURLs returns the list of URLs to try for connection (failover support)
@@ -521,7 +611,11 @@ func (c *Client) handleReconnection() {
 	}
 
 	c.reconnecting = true
-	defer func() { c.reconnecting = false }()
+	c.setReconnecting(true)
+	defer func() {
+		c.reconnecting = false
+		c.setReconnecting(false)
+	}()
 
 	attempt := 0
 	for {
@@ -566,6 +660,10 @@ func (c *Client) handleReconnection() {
 			continue
 		}
 		c.connMu.Unlock()
+
+		c.stateMu.Lock()
+		c.state.Reconnects++
+		c.stateMu.Unlock()
 
 		c.config.Metrics.RecordReconnection(attempt)
 		c.config.Logger.Info("Successfully reconnected to RabbitMQ",
