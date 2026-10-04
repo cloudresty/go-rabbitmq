@@ -636,10 +636,14 @@ const (
 	// DeliverySuccess indicates the message was confirmed by the broker and successfully routed
 	DeliverySuccess DeliveryOutcome = "success"
 
-	// DeliveryFailed indicates the message was returned by the broker (no queue bound to routing key),
-	// or that the publisher's confirm channel closed (for example after a connection loss) before the
-	// broker confirmed it. In the second case the error message says so and the message may or may not
-	// have reached the broker: callers that republish must tolerate a duplicate.
+	// DeliveryFailed indicates the message was returned by the broker (no queue bound to routing key).
+	//
+	// WARNING: DeliveryFailed can also mean "delivery state unknown": the publisher's confirm
+	// channel closed (connection loss, or a channel-level error such as 404 NOT_FOUND for a
+	// missing exchange) before the broker confirmed the message. The error message says so and
+	// includes the close reason when the broker gave one. In that case the broker MAY have
+	// accepted the message. Treat it as maybe-delivered: retry only idempotently, and expect
+	// duplicates downstream.
 	DeliveryFailed DeliveryOutcome = "failed"
 
 	// DeliveryNacked indicates the message was negatively acknowledged by the broker
@@ -693,6 +697,13 @@ type DeliveryStats struct {
 
 	// TotalTimedOut is the total number of messages that timed out waiting for confirmation
 	TotalTimedOut int64
+
+	// TotalOrphaned is the total number of messages settled as DeliveryFailed because
+	// their confirm channel closed before the broker confirmed them (delivery state
+	// unknown). Together with TotalConfirmed, TotalReturned, TotalNacked and
+	// TotalTimedOut it accounts for every published message that reached a terminal
+	// outcome.
+	TotalOrphaned int64
 
 	// PendingMessages is the current number of messages awaiting confirmation
 	PendingMessages int64
