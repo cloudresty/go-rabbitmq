@@ -490,20 +490,21 @@ func TestDeliveryAssurance_CallbackMayRepublishSameID(t *testing.T) {
 	}
 }
 
-// TestDeliveryAssurance_CloseDoesNotQueueBehindBlockedPublish simulates a publish
-// stuck in a socket write while holding the publisher's internal lock: only
-// closing its channel releases it. Close must close the channel first and so
-// return promptly, rather than wait for a lock only it can release.
-func TestDeliveryAssurance_CloseDoesNotQueueBehindBlockedPublish(t *testing.T) {
+// TestDeliveryAssurance_CloseIsBoundedWhileAPublishIsStuck simulates a publish
+// stuck in a socket write while holding the publisher's internal lock, for longer
+// than Close is willing to wait. Close must return after its bounded wait rather
+// than hang, be idempotent, and the channel must still get closed once the stuck
+// publish lets go.
+func TestDeliveryAssurance_CloseIsBoundedWhileAPublishIsStuck(t *testing.T) {
 	f := newReconnectFixture(t)
 	p := f.publisher
 	gen := p.currentConfirmGeneration()
 
 	p.publishMu.Lock()
-	go func() {
-		defer p.publishMu.Unlock()
-		for !gen.ch.IsClosed() { // released only by the channel being closed
-			time.Sleep(10 * time.Millisecond)
+	released := false
+	defer func() {
+		if !released {
+			p.publishMu.Unlock()
 		}
 	}()
 
@@ -514,13 +515,23 @@ func TestDeliveryAssurance_CloseDoesNotQueueBehindBlockedPublish(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close did not return while a publish was blocked holding the publish lock")
+	case <-time.After(8 * time.Second): // Close's own bound is 5s
+		t.Fatal("Close hung while a publish held the publish lock")
 	}
 
-	// Idempotent.
 	if err := p.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+
+	// The stuck publish lets go: Close's goroutine finishes the job.
+	p.publishMu.Unlock()
+	released = true
+	deadline := time.Now().Add(5 * time.Second)
+	for !gen.ch.IsClosed() {
+		if time.Now().After(deadline) {
+			t.Fatal("confirm channel never closed after the stuck publish released the lock")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -645,5 +656,266 @@ func TestDeliveryKey_NoCollisionAcrossGenerations(t *testing.T) {
 	m.Delete("old", oldKey)
 	if got, ok := m.LoadByDeliveryTag(newKey); !ok || got != newMsg {
 		t.Error("deleting the old channel's entry removed the new channel's entry")
+	}
+}
+
+// countingRecorder records every callback for one message id, so a test can
+// assert both what was reported and that nothing else was.
+type countingRecorder struct {
+	mu   sync.Mutex
+	seen []deliveryResult
+}
+
+func (c *countingRecorder) callback(_ string, outcome DeliveryOutcome, msg string) {
+	c.mu.Lock()
+	c.seen = append(c.seen, deliveryResult{outcome, msg})
+	c.mu.Unlock()
+}
+
+func (c *countingRecorder) results() []deliveryResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]deliveryResult(nil), c.seen...)
+}
+
+// TestDeliveryAssurance_FailedSendThenRetryYieldsOneCallback covers the retry
+// loop reusing nothing from a failed attempt, and the single-signal contract when
+// a sweep lands while the send is in flight. The first attempt registers, is
+// "swept" (as failOrphans would) and then fails because its channel is gone: the
+// call must return no error, the second attempt must be tracked from scratch and
+// confirmed, and the message must get exactly one callback, a success. With a
+// reused pendingMessage the second attempt's confirm is ignored and there is no
+// callback at all; with an unguarded sweep the first attempt also reports Failed.
+func TestDeliveryAssurance_FailedSendThenRetryYieldsOneCallback(t *testing.T) {
+	f := newReconnectFixture(t)
+	p := f.publisher
+	rec := &countingRecorder{}
+
+	var once sync.Once
+	p.testHookAfterRegister = func(pending *pendingMessage) {
+		once.Do(func() {
+			// The channel dies and its sweep runs while this send is in flight.
+			_ = p.currentConfirmGeneration().ch.Close()
+			p.settleOrphan(pending, " (channel closed: test)")
+		})
+	}
+
+	err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+		NewMessage([]byte("retried")), DeliveryOptions{MessageID: "retried", Mandatory: true, Callback: rec.callback})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(awaitWindow)
+	for len(rec.results()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(time.Second) // room for a (wrong) second callback
+	got := rec.results()
+	if len(got) != 1 || got[0].outcome != DeliverySuccess {
+		t.Fatalf("callbacks = %+v, want exactly one success", got)
+	}
+	if _, stuck := p.pendingMessages.LoadByMessageID("retried"); stuck {
+		t.Error("message left in the pending map after its callback")
+	}
+}
+
+// TestDeliveryAssurance_SweepDuringSendAfterSuccessfulSend: the sweep lands while
+// the send is in flight but the send itself succeeds. The publisher settles the
+// message itself: nil error and exactly one Failed callback with the reason.
+func TestDeliveryAssurance_SweepDuringSendAfterSuccessfulSend(t *testing.T) {
+	f := newReconnectFixture(t)
+	p := f.publisher
+	rec := &countingRecorder{}
+
+	var once sync.Once
+	p.testHookAfterRegister = func(pending *pendingMessage) {
+		once.Do(func() { p.settleOrphan(pending, " (channel closed: test)") })
+	}
+
+	err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+		NewMessage([]byte("swept")), DeliveryOptions{MessageID: "swept", Mandatory: true, Callback: rec.callback})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+	got := rec.results()
+	// Which of the two finishes the message (the broker's confirm, or the
+	// publisher settling the deferred sweep) is nondeterministic only because this
+	// test sweeps a LIVE channel. In production a deferred sweep implies a dead
+	// channel, so no confirm can compete and the publisher's settlement is the one
+	// callback. Either way the contract is exactly one.
+	if len(got) != 1 {
+		t.Fatalf("callbacks = %+v, want exactly one", got)
+	}
+}
+
+// TestRekeyPending_SettledEntryNotResurrected: an entry that already has its
+// outcome must not be re-stored under a new key.
+func TestRekeyPending_SettledEntryNotResurrected(t *testing.T) {
+	p := newUnitPublisher()
+	pending := &pendingMessage{MessageID: "m", key: deliveryKey(3, 5), brokerTag: 5, generation: 3, CallbackFired: true}
+
+	p.rekeyPending(pending, 3, 6, time.Minute)
+
+	if _, ok := p.pendingMessages.LoadByDeliveryTag(deliveryKey(3, 6)); ok {
+		t.Error("settled entry was stored under a new key")
+	}
+	if pending.key != deliveryKey(3, 5) {
+		t.Error("settled entry was re-keyed")
+	}
+}
+
+// TestDeliveryAssurance_SendBlockedPastTimeout: the delivery timeout fires while
+// the send is still in flight. The timeout must not claim the message, or the
+// caller would get a timeout callback and then (send failed) an error and a
+// retry's second callback.
+func TestDeliveryAssurance_SendBlockedPastTimeout(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	stall := 4 * timeout
+
+	t.Run("send fails: error path, one callback from the retry", func(t *testing.T) {
+		f := newReconnectFixture(t)
+		p := f.publisher
+		rec := &countingRecorder{}
+
+		var once sync.Once
+		p.testHookAfterRegister = func(*pendingMessage) {
+			once.Do(func() {
+				time.Sleep(stall) // the timeout fires during the send
+				_ = p.currentConfirmGeneration().ch.Close()
+			})
+		}
+		err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+			NewMessage([]byte("stalled")), DeliveryOptions{MessageID: "stalled", Mandatory: true, Timeout: timeout, Callback: rec.callback})
+		if err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		time.Sleep(time.Second)
+		got := rec.results()
+		if len(got) != 1 || got[0].outcome != DeliverySuccess {
+			t.Fatalf("callbacks = %+v, want exactly one success (from the retried attempt)", got)
+		}
+	})
+
+	t.Run("send succeeds: settled as a timeout, once", func(t *testing.T) {
+		f := newReconnectFixture(t)
+		p := f.publisher
+		rec := &countingRecorder{}
+
+		var once sync.Once
+		p.testHookAfterRegister = func(*pendingMessage) {
+			once.Do(func() { time.Sleep(stall) })
+		}
+		err := p.PublishWithDeliveryAssurance(context.Background(), f.exchange, f.routingKey,
+			NewMessage([]byte("slow")), DeliveryOptions{MessageID: "slow", Mandatory: true, Timeout: timeout, Callback: rec.callback})
+		if err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		time.Sleep(time.Second)
+		got := rec.results()
+		// A confirm that beats the deferred timeout settlement is also legitimate.
+		if len(got) != 1 || (got[0].outcome != DeliveryTimeout && got[0].outcome != DeliverySuccess) {
+			t.Fatalf("callbacks = %+v, want exactly one timeout (or success)", got)
+		}
+	})
+}
+
+// TestPublishTracked_FailedSendIsNotCountedAsPublished: a send that fails rolls
+// back TotalPublished, so published minus terminal outcomes does not drift.
+func TestPublishTracked_FailedSendIsNotCountedAsPublished(t *testing.T) {
+	f := newReconnectFixture(t)
+	p := f.publisher
+
+	p.testHookAfterRegister = func(*pendingMessage) { _ = p.currentConfirmGeneration().ch.Close() }
+	pending := (&pendingMessage{MessageID: "never-sent", PublishedAt: time.Now(), Callback: f.rec.callback}).attempt()
+	_, err := p.publishTracked(context.Background(), f.exchange, f.routingKey, true,
+		NewMessage([]byte("x")).ToAMQPPublishing(), pending, time.Minute)
+	if err == nil {
+		t.Fatal("send on a closed channel succeeded")
+	}
+	stats := p.GetDeliveryStats()
+	if stats.TotalPublished != 0 || stats.PendingMessages != 0 {
+		t.Errorf("stats after a failed send: published=%d pending=%d, want 0 and 0", stats.TotalPublished, stats.PendingMessages)
+	}
+}
+
+// TestAutomaticRetries_AreBoundedByMaxAttempts: a message the broker nacks every
+// time (queue full with reject-publish) is retried maxRetryAttempts times and then
+// reported once as nacked, instead of being retried forever.
+func TestAutomaticRetries_AreBoundedByMaxAttempts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	raw, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	if err != nil {
+		t.Skip("RabbitMQ not available for testing")
+	}
+	defer func() { _ = raw.Close() }()
+	rawCh, err := raw.Channel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := "nack-queue-" + suffix
+	if _, err := rawCh.QueueDeclare(queue, true, false, false, false, amqp.Table{
+		"x-max-length": int32(1),
+		"x-overflow":   "reject-publish",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = rawCh.QueueDelete(queue, false, false, false) }()
+	// Fill it: from now on every publish to it is nacked.
+	if err := rawCh.PublishWithContext(context.Background(), "", queue, false, false, amqp.Publishing{Body: []byte("fill")}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		q, err := rawCh.QueueDeclarePassive(queue, true, false, false, false, amqp.Table{"x-max-length": int32(1), "x-overflow": "reject-publish"})
+		if err == nil && q.Messages == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queue did not fill")
+		}
+	}
+
+	client, err := NewClient(WithHosts("localhost:5672"), WithCredentials("guest", "guest"),
+		WithConnectionName("nack-bounded-"+suffix))
+	if err != nil {
+		t.Skip("RabbitMQ not available for testing")
+	}
+	defer func() { _ = client.Close() }()
+
+	rec := &countingRecorder{}
+	const maxRetries = 2
+	publisher, err := client.NewPublisher(
+		WithDeliveryAssurance(),
+		WithDefaultDeliveryCallback(rec.callback),
+		WithPublisherRetry(maxRetries, 50*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = publisher.Close() }()
+
+	err = publisher.PublishWithDeliveryAssurance(context.Background(), "", queue,
+		NewMessage([]byte("always nacked")), DeliveryOptions{MessageID: "nacked-" + suffix})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(awaitWindow)
+	for len(rec.results()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(time.Second) // room for retries that should not happen
+	got := rec.results()
+	if len(got) != 1 || got[0].outcome != DeliveryNacked {
+		t.Fatalf("callbacks = %+v, want exactly one nacked", got)
+	}
+	if n := publisher.GetDeliveryStats().TotalPublished; n != 1+maxRetries {
+		t.Errorf("publishes = %d, want %d (the original plus %d retries)", n, 1+maxRetries, maxRetries)
 	}
 }

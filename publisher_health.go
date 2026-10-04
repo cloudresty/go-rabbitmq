@@ -95,16 +95,31 @@ func (p *Publisher) DeliveryHealth() DeliveryHealth {
 		h.ReadersRunning = gen.readers.Load() == 2
 	}
 
-	now := time.Now()
+	// Collect first and inspect afterwards: rekeyPending takes pending.mu and then a
+	// shard lock, so taking pending.mu inside Range (shard lock held) would invert
+	// that order. Entries already claimed (CallbackFired) have an outcome and are
+	// only waiting for their cleanup goroutine; they are not "pending" for health.
+	var entries []*pendingMessage
 	p.pendingMessages.Range(func(_ string, pending *pendingMessage) bool {
-		if age := now.Sub(pending.PublishedAt); age > h.OldestPendingAge {
-			h.OldestPendingAge = age
-		}
-		if pending.timeout > h.ConfirmTimeout {
-			h.ConfirmTimeout = pending.timeout
-		}
+		entries = append(entries, pending)
 		return true
 	})
+	now := time.Now()
+	for _, pending := range entries {
+		pending.mu.Lock()
+		claimed := pending.CallbackFired
+		publishedAt, timeout := pending.PublishedAt, pending.timeout
+		pending.mu.Unlock()
+		if claimed {
+			continue
+		}
+		if age := now.Sub(publishedAt); age > h.OldestPendingAge {
+			h.OldestPendingAge = age
+		}
+		if timeout > h.ConfirmTimeout {
+			h.ConfirmTimeout = timeout
+		}
+	}
 
 	p.statsMutex.RLock()
 	h.LastConfirmAt = p.lastResponseAt
@@ -336,7 +351,7 @@ func (h DeliveryHealth) Assess(prev DeliveryHealth, cs ClientState, pol Delivery
 	case !h.ReadersRunning:
 		return HealthDegraded, fmt.Sprintf("confirm/return readers of generation %d are not both running", h.Generation)
 	case h.OldestPendingAge > h.ConfirmTimeout+pendingSlack:
-		return HealthDegraded, fmt.Sprintf("oldest pending message is %s old, past its %s timeout (timeout timer not firing)",
+		return HealthDegraded, fmt.Sprintf("oldest pending message is %s old, past its %s timeout (timeout timer not firing, or its send is blocked on the wire)",
 			h.OldestPendingAge.Round(time.Second), h.ConfirmTimeout)
 	case prev.Enabled && failuresMoved > 0:
 		return HealthDegraded, fmt.Sprintf("%d delivery timeouts/orphans since previous check (%d confirmed/returned/nacked in the same period); %d consecutive since last broker response",
