@@ -2,9 +2,11 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -18,14 +20,26 @@ type Publisher struct {
 
 	// Delivery assurance fields
 	deliveryAssuranceEnabled bool
-	confirmChannel           *amqp.Channel      // Dedicated channel for delivery assurance
 	pendingMessages          *shardedPendingMap // Sharded map for pending messages (reduces contention by 32x)
-	confirmChan              chan amqp.Confirmation
-	returnChan               chan amqp.Return
 	shutdownChan             chan struct{}
 	shutdownWg               sync.WaitGroup
-	nextDeliveryTag          uint64
-	deliveryTagMutex         sync.Mutex
+
+	// publishMu serialises everything that must be atomic with respect to the
+	// dedicated confirm channel: allocating a delivery tag, registering the
+	// pending message, the basic.publish itself, replacing the channel and
+	// Close. It is never taken by the confirm/return readers on their hot path,
+	// so a publish blocked on the wire can never stall confirm delivery.
+	publishMu  sync.Mutex
+	genCounter uint64 // last generation id handed out; guarded by publishMu
+
+	// confirmGen is the current confirm channel. It is only replaced under
+	// publishMu but may be read without it (Close must be able to find the
+	// channel while a publish holding publishMu is blocked on the wire).
+	confirmGen atomic.Pointer[confirmGeneration]
+
+	// closed is set by Close. Atomic so Close never has to queue behind a publish
+	// to announce itself.
+	closed atomic.Bool
 
 	// Delivery statistics
 	stats      DeliveryStats
@@ -71,10 +85,17 @@ type pendingMessage struct {
 	PublishedAt  time.Time
 	Callback     DeliveryCallback
 	TimeoutTimer *time.Timer
-	DeliveryTag  uint64
-	Exchange     string
-	RoutingKey   string
-	Mandatory    bool
+	// key is the pending map's key for this message: the broker's delivery tag
+	// qualified by the confirm channel generation (see deliveryKey). The broker
+	// restarts tags at 1 on every new channel, so the bare tag is not unique over
+	// the life of the publisher; the key is. brokerTag and generation are the two
+	// halves, kept separately for logs.
+	key        uint64
+	brokerTag  uint64
+	generation uint64 // confirm channel generation the message was published on
+	Exchange   string
+	RoutingKey string
+	Mandatory  bool
 
 	// Automatic retry support (only populated if automatic retries are enabled)
 	OriginalMessage *Message        // Cloned message for retry (nil if retries disabled)
@@ -810,15 +831,12 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	// Ensure MessageId is set for correlation with returns
 	publishing.MessageId = messageID
 
-	// Get next delivery tag for tracking
-	deliveryTag := p.getNextDeliveryTag()
-
-	// Create pending message entry
+	// Create pending message entry. Its delivery tag and timeout timer are
+	// assigned by publishTracked, atomically with the actual publish.
 	pending := &pendingMessage{
 		MessageID:   messageID,
 		PublishedAt: time.Now(),
 		Callback:    callback,
-		DeliveryTag: deliveryTag,
 		Exchange:    exchange,
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
@@ -831,24 +849,6 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		pending.OriginalContext = ctx // Preserve context for trace propagation during retry
 		pending.RetryOptions = options
 	}
-
-	// Set up timeout timer
-	pending.TimeoutTimer = time.AfterFunc(timeout, func() {
-		p.handleTimeout(deliveryTag)
-	})
-
-	// Add to pending messages before publishing
-	// Check for duplicate MessageID to prevent race conditions
-	if !p.pendingMessages.Store(messageID, deliveryTag, pending) {
-		return fmt.Errorf("message with ID '%s' is already pending delivery - MessageID must be unique for in-flight messages", messageID)
-	}
-	pendingCount := p.pendingMessages.Count()
-
-	// Update statistics
-	p.statsMutex.Lock()
-	p.stats.TotalPublished++
-	p.stats.PendingMessages = pendingCount
-	p.statsMutex.Unlock()
 
 	// Start tracing span
 	ctx, span := p.client.config.Tracer.StartSpan(ctx, "rabbitmq.publish_with_delivery_assurance")
@@ -872,28 +872,26 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 			break
 		}
 
-		publishErr = p.confirmChannel.PublishWithContext(
-			ctx,
-			exchange,
-			routingKey,
-			mandatory,
-			p.config.Immediate,
-			publishing,
-		)
+		var gen *confirmGeneration
+		gen, publishErr = p.publishTracked(ctx, exchange, routingKey, mandatory, publishing, pending, timeout)
 
 		// Success - message published
 		if publishErr == nil {
 			break
 		}
 
+		// A duplicate MessageID is rejected before anything is sent or recorded.
+		var dupErr *duplicateMessageIDError
+		if errors.As(publishErr, &dupErr) {
+			return publishErr
+		}
+
 		// Check if this is a channel/connection error and AutoReconnect is enabled
 		if isChannelError(publishErr) && p.client.config.AutoReconnect {
 			// Check context cancellation FIRST (important for timeout control with unlimited retries)
-			select {
-			case <-ctx.Done():
-				publishErr = ctx.Err()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				publishErr = ctxErr
 				break
-			default:
 			}
 
 			// Check if ReconnectPolicy allows retry
@@ -929,10 +927,9 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 			select {
 			case <-ctx.Done():
 				publishErr = ctx.Err()
-				break
 			case <-time.After(reconnectDelay):
 				// Attempt to refresh the channel
-				if refreshErr := p.refreshConfirmChannel(); refreshErr != nil {
+				if refreshErr := p.refreshConfirmChannel(gen); refreshErr != nil {
 					p.client.config.Logger.Error("Failed to refresh confirm channel",
 						"error", refreshErr,
 						"attempt", attempt+1,
@@ -945,22 +942,6 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 					"message_id", messageID,
 					"attempt", attempt+2)
 
-				// Need to re-register the pending message with a new delivery tag
-				// since we have a new channel
-				p.pendingMessages.Delete(messageID, deliveryTag)
-				pending.TimeoutTimer.Stop()
-
-				deliveryTag = p.getNextDeliveryTag()
-				pending.DeliveryTag = deliveryTag
-				pending.TimeoutTimer = time.AfterFunc(timeout, func() {
-					p.handleTimeout(deliveryTag)
-				})
-
-				if !p.pendingMessages.Store(messageID, deliveryTag, pending) {
-					publishErr = fmt.Errorf("message with ID '%s' is already pending delivery after channel refresh", messageID)
-					break
-				}
-
 				continue // Retry the publish with the refreshed channel
 			}
 		}
@@ -970,18 +951,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 	}
 
 	if publishErr != nil {
-		// Remove from pending messages on publish error
-		p.pendingMessages.Delete(messageID, deliveryTag)
-		pendingCount := p.pendingMessages.Count()
-
-		// Stop timeout timer
-		pending.TimeoutTimer.Stop()
-
-		// Update statistics
-		p.statsMutex.Lock()
-		p.stats.PendingMessages = pendingCount
-		p.statsMutex.Unlock()
-
+		// publishTracked already removed the pending entry and stopped its timer.
 		p.client.config.Metrics.RecordError("publish_with_delivery_assurance", publishErr)
 		span.SetStatus(SpanStatusError, publishErr.Error())
 		return fmt.Errorf("failed to publish message: %w", publishErr)
@@ -999,22 +969,58 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 
 // Publisher management
 
-// Close closes the publisher and its channel.
+// Close closes the publisher and its channel. It is idempotent.
+//
 // If delivery assurance is enabled, this method will:
 //   - Signal shutdown to background goroutines
-//   - Wait for pending confirmations (with timeout)
 //   - Close the dedicated confirmation channel
+//   - Wait for the background goroutines (with timeout)
 //   - Clean up all resources
+//
+// Close does NOT settle messages still awaiting confirmation: their delivery
+// callbacks are dropped and their timeouts cancelled (a warning with the count is
+// logged). Wait for outstanding callbacks before closing if you need them.
+//
+// Close never queues behind an in-flight publish. A publish blocked on the wire
+// while holding the publisher's internal lock is released by closing its channel,
+// so the channel is closed first and the lock is only touched afterwards, with a
+// bounded wait.
 func (p *Publisher) Close() error {
 	// Shutdown delivery assurance if enabled
 	if p.deliveryAssuranceEnabled {
+		if !p.closed.CompareAndSwap(false, true) {
+			return nil
+		}
+
 		pendingCount := p.pendingMessages.Count()
 
 		p.client.config.Logger.Info("Shutting down delivery assurance",
 			"pending_messages", pendingCount)
 
-		// Signal shutdown to background goroutines
+		// Signal shutdown to background goroutines. Readers that see their
+		// channel close from now on drop their orphans instead of settling them.
 		close(p.shutdownChan)
+
+		// Close the confirm channel(s) before touching publishMu: that is what
+		// unblocks a publish stuck in a socket write. The barrier afterwards makes
+		// sure no refresh is still installing a channel (and starting readers) when
+		// we Wait; a refresh that starts later sees closed and installs nothing.
+		first := p.confirmGen.Load()
+		p.closeConfirmChannel(first)
+		barrier := make(chan struct{})
+		go func() {
+			defer close(barrier)
+			p.publishMu.Lock()
+			p.publishMu.Unlock() //nolint:staticcheck // empty critical section is the barrier
+			if last := p.confirmGen.Load(); last != first {
+				p.closeConfirmChannel(last)
+			}
+		}()
+		select {
+		case <-barrier:
+		case <-time.After(5 * time.Second):
+			p.client.config.Logger.Warn("Timeout waiting for in-flight publish to release the confirm channel")
+		}
 
 		// Wait for background goroutines to finish (with timeout)
 		done := make(chan struct{})
@@ -1044,14 +1050,6 @@ func (p *Publisher) Close() error {
 			p.client.config.Logger.Warn("Publisher closed with pending messages",
 				"pending_count", finalPendingCount)
 		}
-
-		// Close the dedicated confirmation channel
-		if p.confirmChannel != nil && !p.confirmChannel.IsClosed() {
-			if err := p.confirmChannel.Close(); err != nil {
-				p.client.config.Logger.Error("Failed to close confirmation channel",
-					"error", err.Error())
-			}
-		}
 	}
 
 	// Close the main publishing channel
@@ -1065,6 +1063,17 @@ func (p *Publisher) Close() error {
 
 	p.client.config.Logger.Info("Publisher closed successfully")
 	return nil
+}
+
+// closeConfirmChannel closes a generation's channel if it is still open.
+func (p *Publisher) closeConfirmChannel(gen *confirmGeneration) {
+	if gen == nil || gen.ch == nil || gen.ch.IsClosed() {
+		return
+	}
+	if err := gen.ch.Close(); err != nil {
+		p.client.config.Logger.Error("Failed to close confirmation channel",
+			"error", err.Error())
+	}
 }
 
 // Helper methods for message processing
@@ -1121,7 +1130,12 @@ func (p *Publisher) waitForConfirmation(ctx context.Context) error {
 
 	// Wait for confirmation with timeout
 	select {
-	case confirmation := <-p.config.confirmations:
+	case confirmation, ok := <-p.config.confirmations:
+		if !ok {
+			// The channel was closed under us (connection loss); a closed channel
+			// yields a zero Confirmation, which must not be read as a broker nack.
+			return fmt.Errorf("confirmation channel closed before the broker answered")
+		}
 		start := time.Now()
 		success := confirmation.Ack
 		p.client.config.Metrics.RecordPublishConfirmation(success, time.Since(start))
@@ -1143,6 +1157,74 @@ func (p *Publisher) waitForConfirmation(ctx context.Context) error {
 
 // Delivery Assurance Infrastructure
 
+// confirmGeneration is one incarnation of the dedicated confirm channel.
+//
+// A channel's delivery tags, its NotifyPublish/NotifyReturn listeners and the
+// goroutines draining them all belong to exactly one generation. amqp091 closes
+// every listener when the channel or its connection shuts down, which ends that
+// generation's readers; a replacement channel therefore always gets a fresh pair
+// of readers bound to its own notification channels, and an old reader can never
+// touch state that belongs to a newer channel.
+//
+// This relies on amqp091 closing listeners when a channel dies, i.e. on its
+// automatic connection/channel recovery (amqp.Config.Recovery) staying disabled:
+// with recovery a channel would be reopened in place and its listeners kept, and
+// the tags would restart under the same generation. Client.connect never enables
+// it, and initDeliveryAssurance refuses a connection that has it enabled.
+type confirmGeneration struct {
+	id uint64
+	ch *amqp.Channel
+
+	// published counts the basic.publish calls that succeeded on ch, i.e. the
+	// delivery tag amqp091 and the broker last assigned. Guarded by
+	// Publisher.publishMu.
+	published uint64
+
+	// mu guards dead and makes "check dead, then register the pending message"
+	// atomic with respect to failOrphans marking the generation dead and then
+	// sweeping the pending map. It is only ever held for those two short,
+	// non-blocking steps, never across I/O.
+	mu sync.Mutex
+
+	// dead is set once ch's listeners have closed. Nothing is registered against
+	// a dead generation. Guarded by mu.
+	dead bool
+
+	// closes receives the *amqp.Error that closed ch, if there was one, so the
+	// reason can be reported on the messages orphaned by it.
+	closes chan *amqp.Error
+
+	// returnsDone is closed when this generation's return reader has exited, so
+	// the confirm reader can settle orphans only after queued returns were handled.
+	returnsDone chan struct{}
+}
+
+// deliveryTagBits is the part of a pending-map key that holds the broker's
+// delivery tag; the generation id occupies the bits above it. Layout limits: 2^40
+// (about 1.1e12) publishes per channel generation and 2^24 (about 16.7M)
+// generations per publisher before ids wrap; either is unreachable in practice
+// (a generation is one channel lifetime), and a wrapped generation would also need
+// a still-pending entry from 16.7M channels ago to collide.
+const deliveryTagBits = 40
+
+// deliveryKey builds the pending-map key for a broker delivery tag on a given
+// channel generation. The broker restarts delivery tags at 1 on each channel, so
+// the key must carry the generation or an entry left over from a dead channel
+// could be matched by (or deleted on behalf of) a message on its replacement.
+func deliveryKey(generation, tag uint64) uint64 {
+	return generation<<deliveryTagBits | tag&(1<<deliveryTagBits-1)
+}
+
+// duplicateMessageIDError reports a MessageID that is already pending.
+type duplicateMessageIDError struct{ messageID string }
+
+func (e *duplicateMessageIDError) Error() string {
+	return fmt.Sprintf("message with ID '%s' is already pending delivery - MessageID must be unique for in-flight messages", e.messageID)
+}
+
+// errPublisherClosed is returned by publishes racing with Close.
+var errPublisherClosed = errors.New("publisher is closed")
+
 // initDeliveryAssurance initializes the delivery assurance infrastructure
 func (p *Publisher) initDeliveryAssurance() error {
 	// Create a dedicated channel for delivery assurance
@@ -1157,23 +1239,22 @@ func (p *Publisher) initDeliveryAssurance() error {
 		return fmt.Errorf("failed to enable confirm mode: %w", err)
 	}
 
+	p.client.connMu.RLock()
+	recovery := p.client.conn != nil && p.client.conn.IsRecoveryEnabled()
+	p.client.connMu.RUnlock()
+	if recovery {
+		_ = confirmCh.Close()
+		return errors.New("delivery assurance requires amqp091 connection recovery to be disabled")
+	}
+
 	// Initialize publisher fields
 	p.deliveryAssuranceEnabled = true
-	p.confirmChannel = confirmCh
 	p.pendingMessages = newShardedPendingMap()
-	p.confirmChan = make(chan amqp.Confirmation, 100)
-	p.returnChan = make(chan amqp.Return, 100)
 	p.shutdownChan = make(chan struct{})
-	p.nextDeliveryTag = 1
 
-	// Set up notification channels
-	confirmCh.NotifyPublish(p.confirmChan)
-	confirmCh.NotifyReturn(p.returnChan)
-
-	// Start background goroutines for processing confirmations and returns
-	p.shutdownWg.Add(2)
-	go p.processConfirmations()
-	go p.processReturns()
+	p.publishMu.Lock()
+	p.installConfirmGenerationLocked(confirmCh)
+	p.publishMu.Unlock()
 
 	p.client.config.Logger.Info("Delivery assurance initialized",
 		"connection_name", p.client.config.ConnectionName)
@@ -1181,51 +1262,220 @@ func (p *Publisher) initDeliveryAssurance() error {
 	return nil
 }
 
-// refreshConfirmChannel attempts to get a new channel from the client and reinitialize
-// the delivery assurance infrastructure. This is used when AutoReconnect is enabled
-// and the current channel has closed due to a connection error.
+// installConfirmGenerationLocked makes ch (already in confirm mode) the current
+// confirm channel and starts the readers bound to it. Must hold publishMu, and
+// must not be called once the publisher is closed.
+func (p *Publisher) installConfirmGenerationLocked(ch *amqp.Channel) *confirmGeneration {
+	p.genCounter++
+	gen := &confirmGeneration{
+		id:          p.genCounter,
+		ch:          ch,
+		returnsDone: make(chan struct{}),
+	}
+
+	// Register the listeners before the channel is published as current, and hand
+	// the notification channels to the readers as arguments rather than through a
+	// shared field.
+	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 100))
+	returns := ch.NotifyReturn(make(chan amqp.Return, 100))
+	gen.closes = ch.NotifyClose(make(chan *amqp.Error, 1))
+
+	p.confirmGen.Store(gen)
+
+	// Callers check closed under publishMu and Close passes through publishMu
+	// after setting it and before it waits, so Add cannot race with Wait.
+	p.shutdownWg.Add(2)
+	go p.runConfirmReader(gen, confirms)
+	go p.runReturnReader(gen, returns)
+
+	return gen
+}
+
+// currentConfirmGeneration returns the generation new publishes are made on.
+func (p *Publisher) currentConfirmGeneration() *confirmGeneration {
+	return p.confirmGen.Load()
+}
+
+// publishTracked publishes on the current confirm channel and registers pending
+// for it, as one step.
 //
-// This method performs a "hot-swap" of the internal channel:
-//  1. Gets a new channel from the client
-//  2. Enables confirm mode on the new channel
-//  3. Sets up new notification channels
-//  4. Resets the delivery tag counter
+// The delivery tag is allocated here, under publishMu, only after every check
+// that can reject the publish, and only counts once the basic.publish has been
+// accepted: the broker numbers a channel's publishes itself, so a tag taken for a
+// publish that never reached the wire would shift every later tag off by one and
+// make every later confirm match the wrong message or none. If the publish fails
+// the pending entry and its timer are removed again and the counter is untouched
+// (amqp091 rolls back its own counter in the same situation).
 //
-// Note: Pending messages from the old channel will timeout normally.
-// The background goroutines (processConfirmations/processReturns) continue running
-// as they receive from channels that are replaced atomically.
-func (p *Publisher) refreshConfirmChannel() error {
-	// Get a new channel from the client
+// The pending entry is stored before the bytes are sent, so a confirm cannot
+// overtake its registration. It returns the generation used so that a channel
+// error can be answered by replacing exactly that generation.
+func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey string, mandatory bool, publishing amqp.Publishing, pending *pendingMessage, timeout time.Duration) (*confirmGeneration, error) {
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
+
+	if p.closed.Load() {
+		return nil, errPublisherClosed
+	}
+
+	gen := p.confirmGen.Load()
+	if gen.ch.IsClosed() {
+		return gen, amqp.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return gen, err
+	}
+
+	tag := gen.published + 1
+	key := deliveryKey(gen.id, tag)
+	messageID := pending.MessageID
+
+	pending.key = key
+	pending.brokerTag = tag
+	pending.generation = gen.id
+	pending.TimeoutTimer = time.AfterFunc(timeout, func() {
+		p.handleTimeout(key)
+	})
+
+	// Check "generation not dead" and register in one step under gen.mu.
+	// failOrphans sets dead under the same mutex and only then sweeps the pending
+	// map, so either we see dead (and register nothing), or our entry is already
+	// in the map when the sweep runs and gets settled with the rest. Nothing is
+	// ever registered after the sweep, and neither side holds gen.mu across I/O.
+	gen.mu.Lock()
+	if gen.dead {
+		gen.mu.Unlock()
+		pending.TimeoutTimer.Stop()
+		return gen, amqp.ErrClosed
+	}
+	// Check for duplicate MessageID to prevent race conditions
+	stored := p.pendingMessages.Store(messageID, key, pending)
+	gen.mu.Unlock()
+	if !stored {
+		pending.TimeoutTimer.Stop()
+		return gen, &duplicateMessageIDError{messageID: messageID}
+	}
+	pendingCount := p.pendingMessages.Count()
+
+	// Update statistics
+	p.statsMutex.Lock()
+	p.stats.TotalPublished++
+	p.stats.PendingMessages = pendingCount
+	p.statsMutex.Unlock()
+
+	dc, err := gen.ch.PublishWithDeferredConfirmWithContext(ctx, exchange, routingKey, mandatory, p.config.Immediate, publishing)
+	if err != nil {
+		// The caller is told about this failure through the returned error, so no
+		// delivery callback must also fire for it. Claim the message first; if the
+		// channel died mid-publish and failOrphans already settled it, the caller
+		// sees both the error and a Failed callback, which agree.
+		pending.mu.Lock()
+		pending.CallbackFired = true
+		pending.mu.Unlock()
+
+		p.pendingMessages.Delete(messageID, key)
+		pending.TimeoutTimer.Stop()
+
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = p.pendingMessages.Count()
+		p.statsMutex.Unlock()
+		return gen, err
+	}
+
+	gen.published++
+	if dc != nil && dc.DeliveryTag != tag {
+		// Cannot happen while this publisher is the only user of the channel.
+		// Re-key the entry to the tag the channel really used (so its confirm can
+		// still match, unless it already arrived and was dropped) and resynchronise
+		// the counter so later messages are keyed correctly.
+		p.client.config.Logger.Error("Delivery tag mismatch between publisher and channel",
+			"message_id", messageID,
+			"expected_tag", tag,
+			"channel_tag", dc.DeliveryTag)
+		p.rekeyPending(pending, gen.id, dc.DeliveryTag, timeout)
+		gen.published = dc.DeliveryTag
+	}
+
+	return gen, nil
+}
+
+// rekeyPending moves a pending entry to the key for the broker tag it was really
+// given, restarting its timeout under the new key.
+func (p *Publisher) rekeyPending(pending *pendingMessage, generation, tag uint64, timeout time.Duration) {
+	oldKey := pending.key
+	newKey := deliveryKey(generation, tag)
+
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	if pending.TimeoutTimer != nil {
+		pending.TimeoutTimer.Stop()
+	}
+	p.pendingMessages.Delete(pending.MessageID, oldKey)
+	pending.key = newKey
+	pending.brokerTag = tag
+	pending.TimeoutTimer = time.AfterFunc(timeout, func() {
+		p.handleTimeout(newKey)
+	})
+	p.pendingMessages.Store(pending.MessageID, newKey, pending)
+}
+
+// refreshConfirmChannel replaces the confirm channel that failed with a new one,
+// as a hot swap:
+//  1. Gets a new channel from the client and enables confirm mode on it (outside
+//     the publish lock)
+//  2. Starts a fresh pair of confirm/return readers bound to the new channel
+//  3. Starts the new generation's delivery tags from 1
+//  4. Closes the old channel
+//
+// Messages still pending on the old channel can never be confirmed. They are
+// settled as soon as the old channel's listeners close (see failOrphans), not
+// left to run into their delivery timeout.
+//
+// It is a no-op when failed is no longer the current generation, because a
+// concurrent publisher already replaced it; replacing it again would orphan
+// that publisher's channel.
+func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
+	if p.closed.Load() {
+		return errPublisherClosed
+	}
+	if p.confirmGen.Load() != failed {
+		return nil
+	}
+
+	// Open and prepare the new channel WITHOUT holding publishMu. getChannel waits
+	// on the client's connection lock, which the reconnect loop holds for the
+	// whole outage; holding publishMu across that wait would stall every publish
+	// and Close for as long as the broker is away.
 	newCh, err := p.client.getChannel()
 	if err != nil {
 		return fmt.Errorf("failed to get new channel: %w", err)
 	}
-
-	// Enable confirm mode on the new channel
 	if err := newCh.Confirm(false); err != nil {
 		_ = newCh.Close()
 		return fmt.Errorf("failed to enable confirm mode on new channel: %w", err)
 	}
 
-	// Create new notification channels
-	newConfirmChan := make(chan amqp.Confirmation, 100)
-	newReturnChan := make(chan amqp.Return, 100)
+	// Install under publishMu, re-checking what may have changed meanwhile.
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
 
-	// Register notification handlers on the new channel
-	newCh.NotifyPublish(newConfirmChan)
-	newCh.NotifyReturn(newReturnChan)
+	if p.closed.Load() {
+		_ = newCh.Close()
+		return errPublisherClosed
+	}
+	old := p.confirmGen.Load()
+	if old != failed {
+		// A concurrent publisher already replaced it; keep theirs.
+		_ = newCh.Close()
+		return nil
+	}
 
-	// Atomically swap the channels
-	// Note: The old confirmChannel will be closed by RabbitMQ when connection drops
-	p.confirmChannel = newCh
-	p.confirmChan = newConfirmChan
-	p.returnChan = newReturnChan
+	p.installConfirmGenerationLocked(newCh)
 
-	// Reset delivery tag counter for new channel
-	// Each channel has its own delivery tag sequence starting from 1
-	p.deliveryTagMutex.Lock()
-	p.nextDeliveryTag = 1
-	p.deliveryTagMutex.Unlock()
+	// The old channel is normally closed already (that is why we are here); if
+	// it is not, close it so its readers exit and its orphans are settled.
+	p.closeConfirmChannel(old)
 
 	p.client.config.Logger.Info("Confirm channel refreshed successfully",
 		"connection_name", p.client.config.ConnectionName)
@@ -1275,8 +1525,10 @@ func (p *Publisher) refreshChannel() error {
 	return nil
 }
 
-// processConfirmations processes publisher confirmations in the background
-func (p *Publisher) processConfirmations() {
+// runConfirmReader drains one generation's confirmations. It is bound to that
+// generation's notification channel and exits when amqp091 closes it (channel or
+// connection shutdown) or the publisher is closed.
+func (p *Publisher) runConfirmReader(gen *confirmGeneration, confirms <-chan amqp.Confirmation) {
 	defer p.shutdownWg.Done()
 
 	for {
@@ -1284,26 +1536,29 @@ func (p *Publisher) processConfirmations() {
 		case <-p.shutdownChan:
 			return
 
-		case confirmation, ok := <-p.confirmChan:
+		case confirmation, ok := <-confirms:
 			if !ok {
+				p.failOrphans(gen)
 				return
 			}
 
-			p.handleConfirmation(confirmation)
+			p.handleConfirmation(gen.id, confirmation)
 		}
 	}
 }
 
-// processReturns processes returned messages in the background
-func (p *Publisher) processReturns() {
+// runReturnReader drains one generation's returned messages, with the same
+// lifecycle as runConfirmReader.
+func (p *Publisher) runReturnReader(gen *confirmGeneration, returns <-chan amqp.Return) {
 	defer p.shutdownWg.Done()
+	defer close(gen.returnsDone)
 
 	for {
 		select {
 		case <-p.shutdownChan:
 			return
 
-		case ret, ok := <-p.returnChan:
+		case ret, ok := <-returns:
 			if !ok {
 				return
 			}
@@ -1313,10 +1568,125 @@ func (p *Publisher) processReturns() {
 	}
 }
 
+// failOrphans runs once a generation's channel is gone and every confirmation
+// that was already queued has been handled. Whatever is still waiting on that
+// generation will never be confirmed, so it is settled now.
+//
+// The outcome is DeliveryFailed with an explicit reason, never success: the
+// broker may or may not have accepted the message before the channel died, and
+// that is exactly what the caller needs to be told.
+func (p *Publisher) failOrphans(gen *confirmGeneration) {
+	// Close drops pending callbacks by contract; do not settle on shutdown.
+	select {
+	case <-p.shutdownChan:
+		return
+	default:
+	}
+
+	// Queued returns are handled before orphans are declared.
+	select {
+	case <-gen.returnsDone:
+	case <-p.shutdownChan:
+		return
+	}
+
+	// Mark the generation dead before sweeping. publishTracked checks dead and
+	// registers under the same gen.mu, so an entry is either already in the map
+	// when the sweep below runs, or was never registered. This deliberately does
+	// not take publishMu: a publish blocked on the wire, or a refresh waiting out
+	// a reconnect, would otherwise hold back exactly the settlement that matters
+	// during an outage.
+	gen.mu.Lock()
+	gen.dead = true
+	gen.mu.Unlock()
+
+	// The reason the channel closed, if the broker or connection gave one (for
+	// example 404 NOT_FOUND for a publish to an unknown exchange). amqp091 queues
+	// it before closing the listeners we just saw close.
+	reason := ""
+	select {
+	case e, ok := <-gen.closes:
+		if ok && e != nil {
+			reason = fmt.Sprintf(" (channel closed: %s)", e.Error())
+		}
+	default:
+	}
+
+	var orphans []*pendingMessage
+	p.pendingMessages.Range(func(_ string, pending *pendingMessage) bool {
+		if pending.generation == gen.id {
+			orphans = append(orphans, pending)
+		}
+		return true
+	})
+
+	for _, pending := range orphans {
+		p.settleOrphan(pending, reason)
+	}
+
+	if len(orphans) > 0 {
+		p.client.config.Logger.Warn("Confirm channel closed with unconfirmed messages",
+			"connection_name", p.client.config.ConnectionName,
+			"generation", gen.id,
+			"unconfirmed", len(orphans))
+	}
+}
+
+// settleOrphan finishes a message whose confirm channel died, unless it already
+// has an outcome or is only waiting out its mandatory-return grace period (it was
+// confirmed, so it will finish as a success).
+func (p *Publisher) settleOrphan(pending *pendingMessage, reason string) {
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	if pending.CallbackFired || pending.Confirmed || pending.Nacked || pending.Returned {
+		return
+	}
+
+	errorMessage := "confirm channel closed before the broker confirmed the message; its delivery state is unknown" + reason
+
+	pending.CallbackFired = true
+	pending.FinalOutcome = DeliveryFailed
+	pending.FinalError = errorMessage
+	if pending.TimeoutTimer != nil {
+		pending.TimeoutTimer.Stop()
+	}
+
+	p.statsMutex.Lock()
+	p.stats.TotalOrphaned++
+	p.statsMutex.Unlock()
+
+	p.client.config.Metrics.RecordDeliveryOutcome(DeliveryFailed, time.Since(pending.PublishedAt))
+
+	p.finishAsync(pending.MessageID, pending.key, pending.Callback, DeliveryFailed, errorMessage)
+}
+
+// finishAsync completes a message with a terminal, non-retried outcome. The
+// pending entry is removed BEFORE the callback runs, so a callback that
+// republishes under the same MessageID does not trip the duplicate-ID check. Each
+// message still gets exactly one callback: callers claim the outcome under
+// pending.mu (CallbackFired) before getting here, and a confirm that arrives
+// after the removal finds nothing to act on.
+func (p *Publisher) finishAsync(messageID string, key uint64, callback DeliveryCallback, outcome DeliveryOutcome, errorMessage string) {
+	go func() {
+		p.pendingMessages.Delete(messageID, key)
+		pendingCount := p.pendingMessages.Count()
+
+		p.statsMutex.Lock()
+		p.stats.PendingMessages = pendingCount
+		p.statsMutex.Unlock()
+
+		if callback != nil {
+			callback(messageID, outcome, errorMessage)
+		}
+	}()
+}
+
 // handleConfirmation processes a single confirmation
-func (p *Publisher) handleConfirmation(confirmation amqp.Confirmation) {
-	// Get the pending message using sharded map
-	pending, exists := p.pendingMessages.LoadByDeliveryTag(confirmation.DeliveryTag)
+func (p *Publisher) handleConfirmation(generation uint64, confirmation amqp.Confirmation) {
+	// Get the pending message using sharded map. The broker's tag is only
+	// meaningful together with the channel generation it was issued on.
+	pending, exists := p.pendingMessages.LoadByDeliveryTag(deliveryKey(generation, confirmation.DeliveryTag))
 
 	if !exists {
 		return
@@ -1380,7 +1750,8 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	// Log after acquiring lock to avoid race conditions
 	p.client.config.Logger.Debug("Return matched to pending message",
 		"message_id", messageID,
-		"delivery_tag", pending.DeliveryTag,
+		"delivery_tag", pending.brokerTag,
+		"generation", pending.generation,
 		"confirmed", pending.Confirmed,
 		"callback_fired", pending.CallbackFired)
 
@@ -1388,7 +1759,8 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 	if pending.CallbackFired {
 		p.client.config.Logger.Warn("Return received but callback already fired",
 			"message_id", messageID,
-			"delivery_tag", pending.DeliveryTag,
+			"delivery_tag", pending.brokerTag,
+			"generation", pending.generation,
 			"final_outcome", pending.FinalOutcome)
 		return
 	}
@@ -1399,7 +1771,8 @@ func (p *Publisher) handleReturn(ret amqp.Return) {
 
 	p.client.config.Logger.Debug("Marked message as returned, trying to finalize",
 		"message_id", messageID,
-		"delivery_tag", pending.DeliveryTag,
+		"delivery_tag", pending.brokerTag,
+		"generation", pending.generation,
 		"confirmed", pending.Confirmed)
 
 	// Try to finalize based on current state
@@ -1440,14 +1813,15 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 		// We need to wait a grace period for potential return
 		p.client.config.Logger.Debug("Mandatory message confirmed, starting grace period",
 			"message_id", pending.MessageID,
-			"delivery_tag", pending.DeliveryTag)
+			"delivery_tag", pending.brokerTag,
+			"generation", pending.generation)
 
 		// Reset the timeout timer to the configured grace period
 		if pending.TimeoutTimer != nil {
 			pending.TimeoutTimer.Stop()
 		}
 		pending.TimeoutTimer = time.AfterFunc(p.config.mandatoryGracePeriod, func() {
-			p.handleMandatoryGracePeriodExpired(pending.DeliveryTag)
+			p.handleMandatoryGracePeriodExpired(pending.key)
 		})
 		// Don't finalize yet - wait for return or grace period expiration
 		return
@@ -1457,7 +1831,8 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 		// Not enough information yet - wait for more events
 		p.client.config.Logger.Debug("Not enough information to finalize",
 			"message_id", pending.MessageID,
-			"delivery_tag", pending.DeliveryTag,
+			"delivery_tag", pending.brokerTag,
+			"generation", pending.generation,
 			"confirmed", pending.Confirmed,
 			"returned", pending.Returned,
 			"nacked", pending.Nacked,
@@ -1467,7 +1842,8 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 
 	p.client.config.Logger.Debug("Finalizing message",
 		"message_id", pending.MessageID,
-		"delivery_tag", pending.DeliveryTag,
+		"delivery_tag", pending.brokerTag,
+		"generation", pending.generation,
 		"outcome", outcome,
 		"error", errorMessage)
 
@@ -1507,7 +1883,7 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 	// Copy all necessary data for the callback while still holding the per-message lock
 	callback := pending.Callback
 	messageID := pending.MessageID
-	deliveryTag := pending.DeliveryTag
+	deliveryTag := pending.key
 
 	// Check if we should attempt automatic retry
 	shouldRetry := (outcome == DeliveryNacked &&
@@ -1524,23 +1900,9 @@ func (p *Publisher) tryFinalizeMessage(pending *pendingMessage) {
 		return
 	}
 
-	// Schedule the callback and cleanup to run in a separate goroutine
+	// Schedule the cleanup and callback to run in a separate goroutine
 	// This allows us to release the lock immediately and prevents blocking the handler loop
-	go func() {
-		// Invoke the callback (if provided)
-		if callback != nil {
-			callback(messageID, outcome, errorMessage)
-		}
-
-		// Remove from pending messages after callback is done
-		p.pendingMessages.Delete(messageID, deliveryTag)
-		pendingCount := p.pendingMessages.Count()
-
-		// Update pending count in stats
-		p.statsMutex.Lock()
-		p.stats.PendingMessages = pendingCount
-		p.statsMutex.Unlock()
-	}()
+	p.finishAsync(messageID, deliveryTag, callback, outcome, errorMessage)
 
 	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
 }
@@ -1570,18 +1932,13 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 		// Copy data needed for final callback
 		callback := pending.Callback
 		messageID := pending.MessageID
-		deliveryTag := pending.DeliveryTag
+		deliveryTag := pending.key
 
 		// Release the per-message lock
 		pending.mu.Unlock()
 
-		// Invoke final callback and cleanup
-		if callback != nil {
-			callback(messageID, DeliveryNacked,
-				fmt.Sprintf("message nacked after %d retry attempts", retryCount))
-		}
-
-		// Remove from pending messages
+		// Remove from pending messages first, so a callback that republishes the
+		// same MessageID does not hit the duplicate-ID check
 		p.pendingMessages.Delete(messageID, deliveryTag)
 		pendingCount := p.pendingMessages.Count()
 
@@ -1589,6 +1946,12 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 		p.statsMutex.Lock()
 		p.stats.PendingMessages = pendingCount
 		p.statsMutex.Unlock()
+
+		// Invoke final callback
+		if callback != nil {
+			callback(messageID, DeliveryNacked,
+				fmt.Sprintf("message nacked after %d retry attempts", retryCount))
+		}
 
 		return
 	}
@@ -1601,7 +1964,7 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 	routingKey := pending.RoutingKey
 	options := pending.RetryOptions
 	messageID := pending.MessageID
-	oldDeliveryTag := pending.DeliveryTag
+	oldDeliveryTag := pending.key
 
 	// Release the per-message lock before sleeping and re-publishing
 	pending.mu.Unlock()
@@ -1701,22 +2064,8 @@ func (p *Publisher) handleMandatoryGracePeriodExpired(deliveryTag uint64) {
 	callback := pending.Callback
 	messageID := pending.MessageID
 
-	// Schedule the callback and cleanup to run in a separate goroutine
-	go func() {
-		// Invoke the callback (if provided)
-		if callback != nil {
-			callback(messageID, DeliverySuccess, "")
-		}
-
-		// Remove from pending messages after callback is done
-		p.pendingMessages.Delete(messageID, deliveryTag)
-		pendingCount := p.pendingMessages.Count()
-
-		// Update pending count in stats
-		p.statsMutex.Lock()
-		p.stats.PendingMessages = pendingCount
-		p.statsMutex.Unlock()
-	}()
+	// Schedule the cleanup and callback to run in a separate goroutine
+	p.finishAsync(messageID, deliveryTag, callback, DeliverySuccess, "")
 
 	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
 }
@@ -1762,37 +2111,14 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	errorMessage := pending.FinalError
 	timeout := p.config.deliveryTimeout
 
-	// Schedule the callback and cleanup to run in a separate goroutine
-	go func() {
-		// Invoke the callback (if provided)
-		if callback != nil {
-			callback(messageID, DeliveryTimeout, errorMessage)
-		}
+	p.client.config.Logger.Warn("Message delivery timed out",
+		"message_id", messageID,
+		"timeout", timeout)
 
-		p.client.config.Logger.Warn("Message delivery timed out",
-			"message_id", messageID,
-			"timeout", timeout)
-
-		// Remove from pending messages after callback is done
-		p.pendingMessages.Delete(messageID, deliveryTag)
-		pendingCount := p.pendingMessages.Count()
-
-		// Update pending count in stats
-		p.statsMutex.Lock()
-		p.stats.PendingMessages = pendingCount
-		p.statsMutex.Unlock()
-	}()
+	// Schedule the cleanup and callback to run in a separate goroutine
+	p.finishAsync(messageID, deliveryTag, callback, DeliveryTimeout, errorMessage)
 
 	// The deferred pending.mu.Unlock() will now execute correctly when the function returns
-}
-
-// getNextDeliveryTag returns the next delivery tag for tracking
-func (p *Publisher) getNextDeliveryTag() uint64 {
-	p.deliveryTagMutex.Lock()
-	defer p.deliveryTagMutex.Unlock()
-	tag := p.nextDeliveryTag
-	p.nextDeliveryTag++
-	return tag
 }
 
 // Delivery Assurance Public API
@@ -1822,6 +2148,7 @@ func (p *Publisher) GetDeliveryStats() DeliveryStats {
 		TotalReturned:    p.stats.TotalReturned,
 		TotalNacked:      p.stats.TotalNacked,
 		TotalTimedOut:    p.stats.TotalTimedOut,
+		TotalOrphaned:    p.stats.TotalOrphaned,
 		PendingMessages:  p.stats.PendingMessages,
 		LastConfirmation: p.stats.LastConfirmation,
 		LastReturn:       p.stats.LastReturn,
