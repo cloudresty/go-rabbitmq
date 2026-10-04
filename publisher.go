@@ -49,15 +49,24 @@ type Publisher struct {
 	stats      DeliveryStats
 	statsMutex sync.RWMutex
 
-	// Functional-health bookkeeping (see publisher_health.go). The fields
-	// below statsMutex's line are guarded by it; lastPublishNano is atomic so the
-	// publish path adds no lock acquisition for it.
+	// Functional-health bookkeeping (see publisher_health.go). Times are atomic
+	// monotonic offsets from startedAt (0 = never), so the publish path and the
+	// confirm readers take no lock for them and the values never go backwards with
+	// the wall clock. lastErr/lastErrAt are guarded by statsMutex.
 	startedAt             time.Time
-	lastPublishNano       atomic.Int64
-	lastResponseAt        time.Time // last confirm/nack/return frame read from the broker
-	failuresSinceResponse int64     // timeouts + orphans on the current generation since lastResponseAt
+	lastPublishOff        atomic.Int64
+	lastResponseOff       atomic.Int64 // last confirm/nack/return frame read from the broker
+	failuresSinceResponse atomic.Int64 // timeouts + orphans on the current generation since the last response
 	lastErr               string
 	lastErrAt             time.Time
+
+	// refreshMu serialises confirm-channel refreshes (keeper vs publish path) so
+	// concurrent refreshers of one failed generation do not each open a channel.
+	// Lock order: refreshMu is taken BEFORE publishMu, and never while holding
+	// publishMu, gen.mu or a pending.mu.
+	refreshMu    sync.Mutex
+	refreshOpens atomic.Int64 // channels opened by refreshes (test observability)
+	keeperActive atomic.Bool  // the confirm keeper goroutine is running
 }
 
 // publisherConfig holds publisher-specific configuration
@@ -1048,6 +1057,13 @@ func (p *Publisher) publishWithDeliveryAssurance(ctx context.Context, exchange, 
 // callbacks are dropped and their timeouts cancelled (a warning with the count is
 // logged). Wait for outstanding callbacks before closing if you need them.
 //
+// The background confirm keeper stops as soon as Close begins and never blocks
+// it: its refreshes are non-blocking (they do not wait for the connection lock a
+// reconnect holds, or for another refresher) and re-check closed before every
+// step. A refresh that is already inside a channel RPC when Close starts can
+// still delay Close, which is why Close keeps its own 5s bounds: during a broker
+// outage Close may take up to that bound, never longer.
+//
 // Close never waits unboundedly behind an in-flight publish: closing the channel
 // and passing through the publisher's internal lock happen in one bounded (5s)
 // step, after which Close proceeds regardless. A publish stuck in a socket write
@@ -1358,9 +1374,7 @@ func (p *Publisher) installConfirmGenerationLocked(ch *amqp.Channel) *confirmGen
 
 	// A new channel starts a fresh failure streak: failures on the old one say
 	// nothing about this one.
-	p.statsMutex.Lock()
-	p.failuresSinceResponse = 0
-	p.statsMutex.Unlock()
+	p.failuresSinceResponse.Store(0)
 
 	// Register the listeners before the channel is published as current, and hand
 	// the notification channels to the readers as arguments rather than through a
@@ -1489,7 +1503,7 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	}
 
 	gen.published++
-	p.lastPublishNano.Store(time.Now().UnixNano())
+	p.lastPublishOff.Store(p.sinceStart())
 	if deferred {
 		// The channel died while the send was in flight but the send itself went
 		// through: no confirm will ever come, and failOrphans left the message to
@@ -1558,6 +1572,36 @@ func (p *Publisher) rekeyPending(pending *pendingMessage, generation, tag uint64
 // concurrent publisher already replaced it; replacing it again would orphan
 // that publisher's channel.
 func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
+	return p.refreshConfirmChannelOpt(failed, false)
+}
+
+// errRefreshBusy means a non-blocking refresh could not start right now (another
+// refresh is in progress, or the client's connection lock is held by a dial).
+var errRefreshBusy = errors.New("confirm channel refresh busy")
+
+// refreshConfirmChannelOpt is refreshConfirmChannel. With nonBlocking it never
+// waits for refreshMu or for the client's connection lock and returns
+// errRefreshBusy instead; the background keeper uses it so that it can never hold
+// Close up behind a reconnect or another refresher.
+func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlocking bool) error {
+	if p.closed.Load() {
+		return errPublisherClosed
+	}
+	if p.confirmGen.Load() != failed {
+		return nil
+	}
+
+	// Single-flight: concurrent refreshers of the same failed generation queue
+	// here, and all but the first then see it already replaced and return without
+	// opening a channel of their own.
+	if nonBlocking {
+		if !p.refreshMu.TryLock() {
+			return errRefreshBusy
+		}
+	} else {
+		p.refreshMu.Lock()
+	}
+	defer p.refreshMu.Unlock()
 	if p.closed.Load() {
 		return errPublisherClosed
 	}
@@ -1569,9 +1613,25 @@ func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
 	// on the client's connection lock, which the reconnect loop holds for the
 	// whole outage; holding publishMu across that wait would stall every publish
 	// and Close for as long as the broker is away.
-	newCh, err := p.client.getChannel()
+	p.refreshOpens.Add(1)
+	var (
+		newCh *amqp.Channel
+		err   error
+	)
+	if nonBlocking {
+		newCh, err = p.client.tryGetChannel()
+		if errors.Is(err, errConnectionBusy) {
+			return errRefreshBusy
+		}
+	} else {
+		newCh, err = p.client.getChannel()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get new channel: %w", err)
+	}
+	if p.closed.Load() {
+		_ = newCh.Close()
+		return errPublisherClosed
 	}
 	if err := newCh.Confirm(false); err != nil {
 		_ = newCh.Close()

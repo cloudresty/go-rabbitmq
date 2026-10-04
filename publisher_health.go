@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -81,9 +82,9 @@ func (p *Publisher) DeliveryHealth() DeliveryHealth {
 		ConfirmTimeout: p.config.deliveryTimeout,
 		Pending:        p.pendingMessages.Count(),
 	}
-	if n := p.lastPublishNano.Load(); n != 0 {
-		h.LastPublishAt = time.Unix(0, n)
-	}
+	h.LastPublishAt = p.atOffset(p.lastPublishOff.Load())
+	h.LastConfirmAt = p.atOffset(p.lastResponseOff.Load())
+	h.FailuresSinceConfirm = p.failuresSinceResponse.Load()
 
 	if gen := p.confirmGen.Load(); gen != nil {
 		gen.mu.Lock()
@@ -122,8 +123,6 @@ func (p *Publisher) DeliveryHealth() DeliveryHealth {
 	}
 
 	p.statsMutex.RLock()
-	h.LastConfirmAt = p.lastResponseAt
-	h.FailuresSinceConfirm = p.failuresSinceResponse
 	h.TotalConfirmed = p.stats.TotalConfirmed
 	h.TotalTimedOut = p.stats.TotalTimedOut
 	h.TotalOrphaned = p.stats.TotalOrphaned
@@ -138,11 +137,21 @@ func (p *Publisher) DeliveryHealth() DeliveryHealth {
 
 // noteResponse records that the broker answered (confirm frame or return).
 func (p *Publisher) noteResponse() {
-	now := time.Now()
-	p.statsMutex.Lock()
-	p.lastResponseAt = now
-	p.failuresSinceResponse = 0
-	p.statsMutex.Unlock()
+	p.lastResponseOff.Store(p.sinceStart())
+	p.failuresSinceResponse.Store(0)
+}
+
+// sinceStart is a monotonic offset from startedAt, never 0 (0 means "never").
+func (p *Publisher) sinceStart() int64 {
+	return max(1, int64(time.Since(p.startedAt)))
+}
+
+// atOffset converts a sinceStart offset back to a time (zero for 0).
+func (p *Publisher) atOffset(off int64) time.Time {
+	if off == 0 {
+		return time.Time{}
+	}
+	return p.startedAt.Add(time.Duration(off))
 }
 
 // noteFailureLocked records a timeout or orphan. Must hold statsMutex. A failure
@@ -152,7 +161,7 @@ func (p *Publisher) noteFailureLocked(generation uint64, reason string) {
 	p.lastErr = reason
 	p.lastErrAt = time.Now()
 	if gen := p.confirmGen.Load(); gen == nil || gen.id == generation {
-		p.failuresSinceResponse++
+		p.failuresSinceResponse.Add(1)
 	}
 }
 
@@ -191,6 +200,14 @@ var (
 func (p *Publisher) runConfirmKeeper() {
 	defer p.shutdownWg.Done()
 
+	// Without AutoReconnect the client never replaces a lost connection, so there
+	// is nothing for the keeper to wait for or refresh against.
+	if !p.client.config.AutoReconnect {
+		return
+	}
+	p.keeperActive.Store(true)
+	defer p.keeperActive.Store(false)
+
 	for {
 		gen := p.confirmGen.Load()
 		select {
@@ -212,12 +229,20 @@ func (p *Publisher) runConfirmKeeper() {
 				continue
 			}
 
-			err := p.refreshConfirmChannel(gen)
+			err := p.refreshConfirmChannelOpt(gen, true)
 			if err == nil {
 				break
 			}
 			if p.closed.Load() {
 				return
+			}
+			if errors.Is(err, errRefreshBusy) {
+				// Another refresher, or a dial holding the connection lock: not
+				// a failure, just look again shortly.
+				if !p.keeperSleep(keeperMinBackoff) {
+					return
+				}
+				continue
 			}
 			p.noteKeeperError(fmt.Errorf("refreshing confirm channel: %w", err))
 			p.client.config.Logger.Warn("Confirm channel keeper could not refresh the channel",
@@ -252,7 +277,8 @@ type DeliveryPolicy struct {
 	StallAfter time.Duration
 
 	// MinConnectionAge is how long the connection must have been up before a
-	// Stalled verdict is allowed (restart-storm guard). Default: 2m.
+	// Stalled verdict is allowed (restart-storm guard), and how long GaveUp must
+	// have held to be Stalled. Default: 2m.
 	MinConnectionAge time.Duration
 
 	// MinFailures is how many timeouts or orphans, with no broker response
@@ -309,21 +335,31 @@ const pendingSlack = 5 * time.Second
 // quiet interval of a perfectly healthy publisher, and would be defeated by a
 // single return or nack.
 //
-// Known limit: a broker that has blocked the connection (memory/disk alarm)
-// also stops confirms while the client is connected. That is indistinguishable
-// here from a reader wedge.
+// A connection the broker has blocked (memory or disk alarm, ClientState.Blocked)
+// also stops confirms while the client is connected, and a restart cannot cure
+// it. It is therefore part of the guard (never Stalled while blocked) and the
+// silence clock restarts at ClientState.UnblockedAt.
+//
+// One verdict bypasses the guard on purpose: if the operator capped reconnection
+// (MaxReconnectAttempts > 0) and the cap was exhausted (ClientState.GaveUp) for at
+// least MinConnectionAge, the result is Stalled, because the client will not
+// recover by itself and a restart is the cure. Disabled delivery assurance does
+// not hide it.
 //
 // HealthDegraded is returned when failures moved since prev, the confirm channel
 // is dead or its readers are not both running, the oldest pending message
 // outlived its timeout (the timer itself is wedged), or the Stalled criteria
 // are met except for a guard (the reason names it).
 func (h DeliveryHealth) Assess(prev DeliveryHealth, cs ClientState, pol DeliveryPolicy, now time.Time) (HealthLevel, string) {
+	pol = pol.withDefaults(h.ConfirmTimeout)
+	if lvl, reason, ok := gaveUpVerdict(cs, pol.MinConnectionAge, now); ok {
+		return lvl, reason
+	}
 	if !h.Enabled {
 		return HealthOK, "delivery assurance not enabled"
 	}
-	pol = pol.withDefaults(h.ConfirmTimeout)
 
-	ref := latestOf(h.LastConfirmAt, h.GenerationSince, h.StartedAt, cs.ConnectedAt)
+	ref := latestOf(h.LastConfirmAt, h.GenerationSince, h.StartedAt, cs.ConnectedAt, cs.UnblockedAt)
 	silentFor := now.Sub(ref)
 	failing := h.FailuresSinceConfirm >= pol.MinFailures
 	publishing := h.LastPublishAt.After(ref) && now.Sub(h.LastPublishAt) < pol.StallAfter

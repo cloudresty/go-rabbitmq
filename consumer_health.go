@@ -49,8 +49,10 @@ type ConsumerHealth struct {
 	// SubscribedAt is when the current set of subscriptions was first established.
 	SubscribedAt time.Time
 
-	// NotConsumingSince is when Consuming last became false (or when Consume was
-	// called, if it never subscribed). Zero while consuming and before Consume.
+	// NotConsumingSince is when Consuming last became false, i.e. when no
+	// subscription at all was live (or when Consume was called, if it never
+	// subscribed). It is the hold clock of the Stalled verdict. Zero while any
+	// subscription is live and before Consume.
 	NotConsumingSince time.Time
 
 	// LastDeliveryAt is when a delivery was last received. An old value is NOT a
@@ -64,10 +66,19 @@ type ConsumerHealth struct {
 	// InFlight is the number of deliveries currently being handled.
 	InFlight int
 
-	// ResubscribeFailures is the number of consecutive failed attempts to
-	// (re)establish a subscription (no channel, QoS or Consume failure) since the
-	// last success.
+	// ResubscribeFailures is the highest per-subscription count of consecutive
+	// failed attempts to (re)establish a subscription (no channel, QoS or Consume
+	// failure) since that subscription's last success. Each worker in
+	// channel-per-worker mode has its own streak: one worker's success does not
+	// zero another's, and one worker's streak does not describe the consumer.
 	ResubscribeFailures int
+
+	// FailingSubscriptions is how many subscriptions have a streak at or above
+	// the failure limit (5).
+	FailingSubscriptions int
+
+	// ActiveSubscriptions is how many subscriptions are live right now.
+	ActiveSubscriptions int
 
 	// LastError is the most recent subscription failure.
 	LastError   string
@@ -83,7 +94,6 @@ type consumerHealth struct {
 	begun    bool
 	stopped  bool
 	subs     map[int]*subscriptionState
-	failures int
 	lastErr  string
 	lastErrT time.Time
 	since    time.Time // NotConsumingSince
@@ -99,6 +109,7 @@ type subscriptionState struct {
 	ch        *amqp.Channel
 	active    bool
 	cancelled bool
+	failures  int // consecutive failed (re)subscription attempts of this subscription
 }
 
 func (h *consumerHealth) sub(id int) *subscriptionState {
@@ -138,7 +149,6 @@ func (h *consumerHealth) begin(queue string) {
 	h.begun = true
 	h.stopped = false
 	h.subs = nil
-	h.failures = 0
 	h.subAt = time.Time{}
 	h.since = time.Now()
 }
@@ -163,7 +173,7 @@ func (h *consumerHealth) subscribed(id int, ch *amqp.Channel) {
 	defer h.mu.Unlock()
 	s := h.sub(id)
 	s.ch, s.active, s.cancelled = ch, true, false
-	h.failures = 0
+	s.failures = 0
 	if h.subAt.IsZero() {
 		h.subAt = time.Now()
 	}
@@ -199,7 +209,7 @@ func (h *consumerHealth) failed(id int, err error) {
 	defer h.mu.Unlock()
 	s := h.sub(id)
 	s.active = false
-	h.failures++
+	s.failures++
 	h.lastErr, h.lastErrT = err.Error(), time.Now()
 	h.refreshSinceLocked()
 }
@@ -260,11 +270,17 @@ func (c *Consumer) Health() ConsumerHealth {
 	out.Stopped = h.stopped
 	out.SubscribedAt = h.subAt
 	out.NotConsumingSince = h.since
-	out.ResubscribeFailures = h.failures
 	out.LastError, out.LastErrorAt = h.lastErr, h.lastErrT
 	for _, s := range h.subs {
+		if s.failures > out.ResubscribeFailures {
+			out.ResubscribeFailures = s.failures
+		}
+		if s.failures >= consumerResubscribeFailureLimit {
+			out.FailingSubscriptions++
+		}
 		if s.active {
 			out.Consuming = true
+			out.ActiveSubscriptions++
 			if s.ch != nil && !s.ch.IsClosed() {
 				out.ChannelOpen = true
 			}
@@ -300,24 +316,37 @@ func (pol ConsumerPolicy) withDefaults() ConsumerPolicy {
 // Assess turns a ConsumerHealth snapshot into a verdict. It is pure; cs is
 // Client.State() taken at about the same time.
 //
-// HealthStalled requires that the consumer be unable to consume, that is
-// (!Consuming || CancelledByBroker || ResubscribeFailures >= 5), for at least
-// pol.StallAfter WHILE the connection was healthy, and that the restart-storm
-// guard hold now (cs.Connected, !cs.Reconnecting, connection at least
-// pol.MinConnectionAge old). The hold time is measured from the later of
-// NotConsumingSince and cs.ConnectedAt: a consumer gets a full StallAfter on a
-// fresh connection to resubscribe before it is blamed, rather than being
-// charged for the outage that preceded the reconnect.
+// HealthStalled is reserved for a consumer that cannot consume AT ALL: no
+// subscription is live (Consuming is false). That state must have held for
+// pol.StallAfter while the connection was healthy, measured from the latest of
+// NotConsumingSince, cs.ConnectedAt and cs.UnblockedAt, and the restart-storm
+// guard must hold now (connected, not reconnecting, not blocked, connection at
+// least pol.MinConnectionAge old). A consumer therefore gets a full StallAfter on
+// a fresh connection, or after an unblock, to resubscribe before it is blamed.
+// There is no fallback clock: a missing NotConsumingSince never means "since
+// SubscribedAt".
+//
+// A PARTIALLY broken consumer (channel-per-worker mode where some workers are
+// subscribed but another was cancelled by the broker or has failed to resubscribe
+// 5 times) is at most HealthDegraded. It is still consuming, and a restart would
+// interrupt the healthy workers to fix the sick one.
 //
 // "No deliveries for a long time" is never a fault on its own, however old
-// LastDeliveryAt is: an idle queue is legitimate. It is reported in the
-// reason of an OK verdict only.
+// LastDeliveryAt is: an idle queue is legitimate. It is reported in the reason of
+// an OK verdict only.
 //
-// A consumer that never started, or whose Consume has returned, is
-// HealthDegraded, never Stalled: the first is a wiring question for readiness,
-// the second an intentional stop, and neither is cured by a restart on a timer.
+// A consumer that never started, or whose Consume has returned on a clean stop,
+// is HealthDegraded, never Stalled: the first is a wiring question for readiness,
+// the second an intentional stop. The one verdict that bypasses the connection
+// guard is GaveUp (see ClientState): a client that exhausted a configured
+// MaxReconnectAttempts for at least MinConnectionAge is Stalled, because it will
+// not recover by itself and a restart is the cure.
 func (h ConsumerHealth) Assess(cs ClientState, pol ConsumerPolicy, now time.Time) (HealthLevel, string) {
 	pol = pol.withDefaults()
+
+	if lvl, reason, ok := gaveUpVerdict(cs, pol.MinConnectionAge, now); ok {
+		return lvl, reason
+	}
 
 	switch {
 	case h.Stopped:
@@ -326,27 +355,23 @@ func (h ConsumerHealth) Assess(cs ClientState, pol ConsumerPolicy, now time.Time
 		return HealthDegraded, "consumer has not started consuming"
 	}
 
-	broken := !h.Consuming || h.CancelledByBroker || h.ResubscribeFailures >= consumerResubscribeFailureLimit
-	if !broken {
+	detail := fmt.Sprintf("consumer of %q (consuming: %t, %d subscriptions live, cancelled by broker: %t, %d failing, max %d consecutive resubscribe failures, last error %q)",
+		h.Queue, h.Consuming, h.ActiveSubscriptions, h.CancelledByBroker, h.FailingSubscriptions, h.ResubscribeFailures, h.LastError)
+
+	if h.Consuming {
+		if h.CancelledByBroker || h.FailingSubscriptions > 0 {
+			return HealthDegraded, "partially broken: " + detail
+		}
 		return HealthOK, fmt.Sprintf("consuming %q, %d in flight, last delivery %s, last ack %s",
 			h.Queue, h.InFlight, ageString(h.LastDeliveryAt, now), ageString(h.LastAckAt, now))
 	}
 
-	// ResubscribeFailures >= limit with Consuming still true (another worker is
-	// fine) has no NotConsumingSince; fall back to the subscription time.
-	since := h.NotConsumingSince
-	if since.IsZero() {
-		since = h.SubscribedAt
-	}
-	held := now.Sub(latestOf(since, cs.ConnectedAt))
-	state := fmt.Sprintf("consumer of %q cannot consume (consuming: %t, cancelled by broker: %t, %d consecutive resubscribe failures, last error %q)",
-		h.Queue, h.Consuming, h.CancelledByBroker, h.ResubscribeFailures, h.LastError)
-
+	held := now.Sub(latestOf(h.NotConsumingSince, cs.ConnectedAt, cs.UnblockedAt))
 	if ok, why := connectionTrusted(cs, pol.MinConnectionAge, now); !ok {
-		return HealthDegraded, fmt.Sprintf("%s; not declared stalled: %s", state, why)
+		return HealthDegraded, fmt.Sprintf("%s cannot consume; not declared stalled: %s", detail, why)
 	}
 	if held < pol.StallAfter {
-		return HealthDegraded, fmt.Sprintf("%s for %s (stalled after %s)", state, held.Round(time.Second), pol.StallAfter)
+		return HealthDegraded, fmt.Sprintf("%s cannot consume for %s (stalled after %s)", detail, held.Round(time.Second), pol.StallAfter)
 	}
-	return HealthStalled, fmt.Sprintf("%s for %s with a healthy connection", state, held.Round(time.Second))
+	return HealthStalled, fmt.Sprintf("%s cannot consume for %s with a healthy connection", detail, held.Round(time.Second))
 }
