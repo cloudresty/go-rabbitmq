@@ -2,6 +2,12 @@ module github.com/cloudresty/go-rabbitmq
 
 go 1.26.0
 
+// v1.11.3 was published missing two commits of the reconnect fix: a narrow
+// window where a retried publish could lose its callback silently, a path that
+// could fire two callbacks for one message, and unbounded automatic retries
+// after a nack. Use v1.12.0 or later.
+retract v1.11.3
+
 require github.com/rabbitmq/amqp091-go v1.15.0
 
 require github.com/cloudresty/ulid v1.2.1

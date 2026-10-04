@@ -37,6 +37,10 @@ type Publisher struct {
 	// channel while a publish holding publishMu is blocked on the wire).
 	confirmGen atomic.Pointer[confirmGeneration]
 
+	// testHookAfterRegister, when set by a test, runs after a message is registered
+	// and before it is sent, so tests can interleave a sweep with an in-flight send.
+	testHookAfterRegister func(*pendingMessage)
+
 	// closed is set by Close. Atomic so Close never has to queue behind a publish
 	// to announce itself.
 	closed atomic.Bool
@@ -93,9 +97,22 @@ type pendingMessage struct {
 	key        uint64
 	brokerTag  uint64
 	generation uint64 // confirm channel generation the message was published on
-	Exchange   string
-	RoutingKey string
-	Mandatory  bool
+
+	// inFlight is true from registration until the basic.publish call has
+	// returned. While it is set, the publisher itself decides the outcome of a
+	// failed send (it returns an error and no callback fires), so failOrphans
+	// defers instead of settling: orphanDeferred/orphanReason record that the
+	// channel died, and the publisher settles the message after a successful send.
+	// Guarded by mu.
+	inFlight       bool
+	orphanDeferred bool
+	orphanReason   string
+	// timeoutDeferred: the delivery timeout fired while the send was in flight.
+	// Same single-signal rule as orphans: the publisher decides after the send.
+	timeoutDeferred bool
+	Exchange        string
+	RoutingKey      string
+	Mandatory       bool
 
 	// Automatic retry support (only populated if automatic retries are enabled)
 	OriginalMessage *Message        // Cloned message for retry (nil if retries disabled)
@@ -113,6 +130,26 @@ type pendingMessage struct {
 	CallbackFired bool   // Has the callback been invoked?
 	FinalOutcome  DeliveryOutcome
 	FinalError    string
+}
+
+// attempt returns a fresh pendingMessage for one publish attempt, carrying over
+// only the immutable description of the message. The outcome state (CallbackFired
+// and friends) belongs to a single registration and must start clean: reusing a
+// settled entry would make the next attempt's confirm, timeout and grace handlers
+// all return early and the message would never get its callback.
+func (m *pendingMessage) attempt() *pendingMessage {
+	return &pendingMessage{
+		MessageID:       m.MessageID,
+		PublishedAt:     m.PublishedAt,
+		Callback:        m.Callback,
+		Exchange:        m.Exchange,
+		RoutingKey:      m.RoutingKey,
+		Mandatory:       m.Mandatory,
+		OriginalMessage: m.OriginalMessage,
+		OriginalContext: m.OriginalContext,
+		RetryCount:      m.RetryCount,
+		RetryOptions:    m.RetryOptions,
+	}
 }
 
 // PublisherOption represents a functional option for publisher configuration
@@ -740,6 +777,11 @@ func (p *Publisher) PublishBatchParallel(ctx context.Context, messages []Publish
 // The delivery outcome is reported asynchronously via the callback specified in options
 // or the publisher's default callback.
 //
+// Contract: if the call returns an error, nothing was handed to the broker on its
+// behalf and its callback is NOT invoked; if it returns nil, its callback is invoked
+// exactly once (DeliveryFailed with an "unknown delivery state" reason if the
+// confirm channel dies first, see DeliveryFailed).
+//
 // Example:
 //
 //	err := publisher.PublishWithDeliveryAssurance(ctx, "events", "user.created", message,
@@ -755,6 +797,13 @@ func (p *Publisher) PublishBatchParallel(ctx context.Context, messages []Publish
 //	        },
 //	    })
 func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, routingKey string, message *Message, options DeliveryOptions) error {
+	return p.publishWithDeliveryAssurance(ctx, exchange, routingKey, message, options, 0)
+}
+
+// publishWithDeliveryAssurance is PublishWithDeliveryAssurance with the number of
+// automatic retries already spent on this message, which a retry republish carries
+// forward so that WithPublisherRetry's attempt limit actually bounds the retries.
+func (p *Publisher) publishWithDeliveryAssurance(ctx context.Context, exchange, routingKey string, message *Message, options DeliveryOptions, retryCount int) error {
 	if !p.deliveryAssuranceEnabled {
 		return fmt.Errorf("delivery assurance is not enabled for this publisher")
 	}
@@ -833,21 +882,24 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 
 	// Create pending message entry. Its delivery tag and timeout timer are
 	// assigned by publishTracked, atomically with the actual publish.
-	pending := &pendingMessage{
+	// It is only a template: every publish attempt gets its own pendingMessage
+	// (see attempt), because a failed attempt's entry is settled and must never be
+	// reused for the next one.
+	template := &pendingMessage{
 		MessageID:   messageID,
 		PublishedAt: time.Now(),
 		Callback:    callback,
 		Exchange:    exchange,
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
-		RetryCount:  0,
+		RetryCount:  retryCount,
 	}
 
 	// If automatic retries are enabled, clone the message and store context for retry
 	if p.config.enableAutomaticRetries {
-		pending.OriginalMessage = message.Clone()
-		pending.OriginalContext = ctx // Preserve context for trace propagation during retry
-		pending.RetryOptions = options
+		template.OriginalMessage = message.Clone()
+		template.OriginalContext = ctx // Preserve context for trace propagation during retry
+		template.RetryOptions = options
 	}
 
 	// Start tracing span
@@ -873,7 +925,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		}
 
 		var gen *confirmGeneration
-		gen, publishErr = p.publishTracked(ctx, exchange, routingKey, mandatory, publishing, pending, timeout)
+		gen, publishErr = p.publishTracked(ctx, exchange, routingKey, mandatory, publishing, template.attempt(), timeout)
 
 		// Success - message published
 		if publishErr == nil {
@@ -981,10 +1033,11 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 // callbacks are dropped and their timeouts cancelled (a warning with the count is
 // logged). Wait for outstanding callbacks before closing if you need them.
 //
-// Close never queues behind an in-flight publish. A publish blocked on the wire
-// while holding the publisher's internal lock is released by closing its channel,
-// so the channel is closed first and the lock is only touched afterwards, with a
-// bounded wait.
+// Close never waits unboundedly behind an in-flight publish: closing the channel
+// and passing through the publisher's internal lock happen in one bounded (5s)
+// step, after which Close proceeds regardless. A publish stuck in a socket write
+// is not released by closing its channel; only connection teardown or the
+// heartbeat does.
 func (p *Publisher) Close() error {
 	// Shutdown delivery assurance if enabled
 	if p.deliveryAssuranceEnabled {
@@ -1001,25 +1054,25 @@ func (p *Publisher) Close() error {
 		// channel close from now on drop their orphans instead of settling them.
 		close(p.shutdownChan)
 
-		// Close the confirm channel(s) before touching publishMu: that is what
-		// unblocks a publish stuck in a socket write. The barrier afterwards makes
-		// sure no refresh is still installing a channel (and starting readers) when
-		// we Wait; a refresh that starts later sees closed and installs nothing.
-		first := p.confirmGen.Load()
-		p.closeConfirmChannel(first)
+		// Pass through publishMu (a barrier: no refresh is still installing a
+		// channel and starting readers when we Wait, and one that starts later sees
+		// closed and installs nothing), then close the final channel, all inside one
+		// bounded wait. A publish stuck on the wire holds publishMu and is only
+		// released by connection teardown or heartbeat timeout, and closing a channel
+		// is an RPC that can itself queue behind such a write, so Close must not
+		// depend on either: after 5s it proceeds and the goroutine finishes the
+		// close whenever the publish lets go.
 		barrier := make(chan struct{})
 		go func() {
 			defer close(barrier)
 			p.publishMu.Lock()
 			p.publishMu.Unlock() //nolint:staticcheck // empty critical section is the barrier
-			if last := p.confirmGen.Load(); last != first {
-				p.closeConfirmChannel(last)
-			}
+			p.closeConfirmChannel(p.confirmGen.Load())
 		}()
 		select {
 		case <-barrier:
 		case <-time.After(5 * time.Second):
-			p.client.config.Logger.Warn("Timeout waiting for in-flight publish to release the confirm channel")
+			p.client.config.Logger.Warn("Timeout closing the confirm channel; an in-flight publish is stuck")
 		}
 
 		// Wait for background goroutines to finish (with timeout)
@@ -1333,6 +1386,7 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	pending.key = key
 	pending.brokerTag = tag
 	pending.generation = gen.id
+	pending.inFlight = true // not shared yet, so no lock needed
 	pending.TimeoutTimer = time.AfterFunc(timeout, func() {
 		p.handleTimeout(key)
 	})
@@ -1363,26 +1417,53 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	p.stats.PendingMessages = pendingCount
 	p.statsMutex.Unlock()
 
+	if p.testHookAfterRegister != nil {
+		p.testHookAfterRegister(pending)
+	}
+
 	dc, err := gen.ch.PublishWithDeferredConfirmWithContext(ctx, exchange, routingKey, mandatory, p.config.Immediate, publishing)
+
+	pending.mu.Lock()
+	pending.inFlight = false
+	deferred, reason := pending.orphanDeferred, pending.orphanReason
+	// A deferred timeout is settled only if nothing else decided the message
+	// meanwhile (a mandatory message already confirmed is finished by its grace
+	// timer, not by a stale timeout).
+	deferredTimeout := pending.timeoutDeferred && !pending.Confirmed && !pending.Nacked && !pending.Returned
 	if err != nil {
-		// The caller is told about this failure through the returned error, so no
-		// delivery callback must also fire for it. Claim the message first; if the
-		// channel died mid-publish and failOrphans already settled it, the caller
-		// sees both the error and a Failed callback, which agree.
-		pending.mu.Lock()
+		// One signal only: the caller is told through the returned error, so no
+		// callback may fire for this attempt. Claiming the message here also covers
+		// a sweep that was deferred while the send was in flight.
 		pending.CallbackFired = true
-		pending.mu.Unlock()
+	}
+	pending.mu.Unlock()
+
+	if err != nil {
 
 		p.pendingMessages.Delete(messageID, key)
 		pending.TimeoutTimer.Stop()
 
+		// Nothing was sent, so the message was never published: keep
+		// published minus terminal outcomes from drifting.
 		p.statsMutex.Lock()
+		p.stats.TotalPublished--
 		p.stats.PendingMessages = p.pendingMessages.Count()
 		p.statsMutex.Unlock()
 		return gen, err
 	}
 
 	gen.published++
+	if deferred {
+		// The channel died while the send was in flight but the send itself went
+		// through: no confirm will ever come, and failOrphans left the message to
+		// us. Settle it now so it gets its single callback.
+		p.settleOrphan(pending, reason)
+	} else if deferredTimeout {
+		// The send outlived the delivery timeout but went through. Report what is
+		// true: no confirmation within the window, i.e. a timeout (a late confirm
+		// after this finds nothing to act on).
+		p.handleTimeout(key)
+	}
 	if dc != nil && dc.DeliveryTag != tag {
 		// Cannot happen while this publisher is the only user of the channel.
 		// Re-key the entry to the tag the channel really used (so its confirm can
@@ -1408,6 +1489,10 @@ func (p *Publisher) rekeyPending(pending *pendingMessage, generation, tag uint64
 	pending.mu.Lock()
 	defer pending.mu.Unlock()
 
+	if pending.CallbackFired {
+		// Already settled; re-storing would resurrect a finished entry.
+		return
+	}
 	if pending.TimeoutTimer != nil {
 		pending.TimeoutTimer.Stop()
 	}
@@ -1458,23 +1543,26 @@ func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
 
 	// Install under publishMu, re-checking what may have changed meanwhile.
 	p.publishMu.Lock()
-	defer p.publishMu.Unlock()
 
 	if p.closed.Load() {
+		p.publishMu.Unlock()
 		_ = newCh.Close()
 		return errPublisherClosed
 	}
 	old := p.confirmGen.Load()
 	if old != failed {
 		// A concurrent publisher already replaced it; keep theirs.
+		p.publishMu.Unlock()
 		_ = newCh.Close()
 		return nil
 	}
 
 	p.installConfirmGenerationLocked(newCh)
+	p.publishMu.Unlock()
 
 	// The old channel is normally closed already (that is why we are here); if
-	// it is not, close it so its readers exit and its orphans are settled.
+	// it is not, close it so its readers exit and its orphans are settled. Done
+	// outside the lock: closing is an RPC.
 	p.closeConfirmChannel(old)
 
 	p.client.config.Logger.Info("Confirm channel refreshed successfully",
@@ -1640,6 +1728,13 @@ func (p *Publisher) settleOrphan(pending *pendingMessage, reason string) {
 	defer pending.mu.Unlock()
 
 	if pending.CallbackFired || pending.Confirmed || pending.Nacked || pending.Returned {
+		return
+	}
+	if pending.inFlight {
+		// The send has not returned: publishTracked decides (error and no
+		// callback, or settle after a successful send).
+		pending.orphanDeferred = true
+		pending.orphanReason = reason
 		return
 	}
 
@@ -1985,7 +2080,7 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 	if ctx == nil {
 		ctx = context.Background() // Fallback if no context was stored
 	}
-	err := p.PublishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options)
+	err := p.publishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options, retryCount)
 
 	if err != nil {
 		p.client.config.Logger.Error("Failed to re-publish message for retry",
@@ -2085,6 +2180,13 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 
 	// If callback already fired, do nothing
 	if pending.CallbackFired {
+		return
+	}
+	if pending.inFlight {
+		// A send blocked past the delivery timeout. Do not claim the message: if
+		// the send then fails the caller gets an error and no callback, and if it
+		// succeeds publishTracked settles it as a timeout right after.
+		pending.timeoutDeferred = true
 		return
 	}
 
