@@ -277,8 +277,7 @@ type DeliveryPolicy struct {
 	StallAfter time.Duration
 
 	// MinConnectionAge is how long the connection must have been up before a
-	// Stalled verdict is allowed (restart-storm guard), and how long GaveUp must
-	// have held to be Stalled. Default: 2m.
+	// Stalled verdict is allowed (restart-storm guard). Default: 2m.
 	MinConnectionAge time.Duration
 
 	// MinFailures is how many timeouts or orphans, with no broker response
@@ -340,11 +339,10 @@ const pendingSlack = 5 * time.Second
 // it. It is therefore part of the guard (never Stalled while blocked) and the
 // silence clock restarts at ClientState.UnblockedAt.
 //
-// One verdict bypasses the guard on purpose: if the operator capped reconnection
-// (MaxReconnectAttempts > 0) and the cap was exhausted (ClientState.GaveUp) for at
-// least MinConnectionAge, the result is Stalled, because the client will not
-// recover by itself and a restart is the cure. Disabled delivery assurance does
-// not hide it.
+// A client that exhausted its configured MaxReconnectAttempts (ClientState.GaveUp)
+// is HealthDegraded, never Stalled, and does not bypass the guard: the connection
+// monitor keeps retrying, a restart does not cure a broker outage, and Stalled
+// there would restart every capped client at once during a long outage.
 //
 // HealthDegraded is returned when failures moved since prev, the confirm channel
 // is dead or its readers are not both running, the oldest pending message
@@ -352,7 +350,7 @@ const pendingSlack = 5 * time.Second
 // are met except for a guard (the reason names it).
 func (h DeliveryHealth) Assess(prev DeliveryHealth, cs ClientState, pol DeliveryPolicy, now time.Time) (HealthLevel, string) {
 	pol = pol.withDefaults(h.ConfirmTimeout)
-	if lvl, reason, ok := gaveUpVerdict(cs, pol.MinConnectionAge, now); ok {
+	if lvl, reason, ok := gaveUpVerdict(cs, now); ok {
 		return lvl, reason
 	}
 	if !h.Enabled {

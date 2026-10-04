@@ -409,7 +409,7 @@ A "response" is any confirm frame (ack or nack) or return, because each proves t
 
 A connection the broker has blocked (memory or disk alarm, `ClientState.Blocked`) also stops confirms while the client stays connected, and a restart cannot cure it. A blocked connection is never trusted (never Stalled), and the silence clock restarts at `ClientState.UnblockedAt`.
 
-One verdict deliberately bypasses the guard: if you capped reconnection with `WithMaxReconnectAttempts(n)` (n > 0) and the cap was exhausted (`ClientState.GaveUp`) for at least `MinConnectionAge`, both `Assess` methods return Stalled, because the client will not recover by itself and a restart is the cure. This trades the restart-storm guard for your explicit cap: a broker outage longer than `n x ReconnectDelay` stalls every capped client. Leave the cap at 0 (unlimited, the default) if that is not wanted.
+A client that exhausted a capped `WithMaxReconnectAttempts(n)` (`ClientState.GaveUp`, with `GaveUpAt`) is reported `HealthDegraded` by both `Assess` methods, **never Stalled**, and it does not bypass the guard. `GaveUp` is not terminal: the connection monitor re-enters the reconnect loop every second, so the client keeps retrying, and a restart does not cure a broker outage. Returning Stalled would restart every capped client in the fleet during any outage longer than `n x ReconnectDelay`, which is the storm the guard exists to prevent. Treat `GaveUp` as information for alerting.
 
 &nbsp;
 

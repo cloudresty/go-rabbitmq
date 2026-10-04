@@ -337,14 +337,13 @@ func (pol ConsumerPolicy) withDefaults() ConsumerPolicy {
 //
 // A consumer that never started, or whose Consume has returned on a clean stop,
 // is HealthDegraded, never Stalled: the first is a wiring question for readiness,
-// the second an intentional stop. The one verdict that bypasses the connection
-// guard is GaveUp (see ClientState): a client that exhausted a configured
-// MaxReconnectAttempts for at least MinConnectionAge is Stalled, because it will
-// not recover by itself and a restart is the cure.
+// the second an intentional stop. A client that exhausted a configured
+// MaxReconnectAttempts (GaveUp) is also Degraded, never Stalled: it keeps
+// retrying, and a restart does not cure a broker outage.
 func (h ConsumerHealth) Assess(cs ClientState, pol ConsumerPolicy, now time.Time) (HealthLevel, string) {
 	pol = pol.withDefaults()
 
-	if lvl, reason, ok := gaveUpVerdict(cs, pol.MinConnectionAge, now); ok {
+	if lvl, reason, ok := gaveUpVerdict(cs, now); ok {
 		return lvl, reason
 	}
 

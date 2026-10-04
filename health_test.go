@@ -69,19 +69,16 @@ func TestDeliveryHealthAssess(t *testing.T) {
 		{name: "unblocked long ago does not shield a wedge", mutate: func(_ *DeliveryHealth, cs *ClientState) {
 			cs.BlockedAt, cs.UnblockedAt = ago(50*time.Minute), ago(40*time.Minute)
 		}, want: HealthStalled},
-		{name: "gave up reconnecting is stalled even though not connected", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+		{name: "gave up reconnecting is degraded, never stalled", mutate: func(_ *DeliveryHealth, cs *ClientState) {
 			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Minute)
-		}, want: HealthStalled, reasonPart: "gave up reconnecting"},
-		{name: "gave up reconnecting even while another round is reconnecting", mutate: func(_ *DeliveryHealth, cs *ClientState) {
+		}, want: HealthDegraded, reasonPart: "still retrying"},
+		{name: "gave up while another round is reconnecting", mutate: func(_ *DeliveryHealth, cs *ClientState) {
 			cs.Connected, cs.Reconnecting, cs.GaveUp, cs.GaveUpAt = false, true, true, ago(10*time.Minute)
-		}, want: HealthStalled},
-		{name: "gave up only just now", mutate: func(_ *DeliveryHealth, cs *ClientState) {
-			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(30*time.Second)
-		}, want: HealthDegraded, reasonPart: "exhausted its reconnect attempts"},
+		}, want: HealthDegraded},
 		{name: "gave up with delivery assurance disabled", mutate: func(h *DeliveryHealth, cs *ClientState) {
 			*h = DeliveryHealth{}
 			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Minute)
-		}, want: HealthStalled},
+		}, want: HealthDegraded},
 		{name: "connection reset restarts the silence clock", mutate: func(_ *DeliveryHealth, cs *ClientState) { cs.ConnectedAt = ago(time.Minute) }, want: HealthOK},
 		{name: "new confirm channel restarts the silence clock", mutate: func(h *DeliveryHealth, _ *ClientState) { h.GenerationSince = ago(time.Minute) }, want: HealthOK},
 
@@ -198,6 +195,9 @@ func TestDeliveryAssessNeverStalledWithoutTrustedConnection(t *testing.T) {
 							h.ReadersRunning, h.GenerationAlive = readers, alive
 							h.LastPublishAt = ago(10 * time.Second)
 							cs := ClientState{Connected: connected, Reconnecting: reconnecting, Blocked: blocked, ConnectedAt: ago(connAge)}
+							if gaveUp := !connected; gaveUp {
+								cs.GaveUp, cs.GaveUpAt = true, ago(time.Hour) // GaveUp implies disconnected
+							}
 							lvl, reason := h.Assess(DeliveryHealth{}, cs, DeliveryPolicy{StallAfter: time.Minute}, healthNow)
 							if lvl != HealthStalled {
 								continue
@@ -273,13 +273,10 @@ func TestConsumerHealthAssess(t *testing.T) {
 			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
 			cs.UnblockedAt = ago(time.Minute)
 		}, want: HealthDegraded, reasonPart: "stalled after"},
-		{name: "gave up reconnecting is stalled", mutate: func(h *ConsumerHealth, cs *ClientState) {
+		{name: "gave up reconnecting is degraded, never stalled", mutate: func(h *ConsumerHealth, cs *ClientState) {
 			h.Consuming, h.NotConsumingSince = false, ago(time.Hour)
 			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(5*time.Minute)
-		}, want: HealthStalled, reasonPart: "gave up"},
-		{name: "gave up only just now", mutate: func(h *ConsumerHealth, cs *ClientState) {
-			cs.Connected, cs.GaveUp, cs.GaveUpAt = false, true, ago(10*time.Second)
-		}, want: HealthDegraded},
+		}, want: HealthDegraded, reasonPart: "still retrying"},
 		{name: "four failures alone are not broken", mutate: func(h *ConsumerHealth, _ *ClientState) { h.ResubscribeFailures = 4 }, want: HealthOK},
 
 		{name: "window not met", mutate: func(h *ConsumerHealth, _ *ClientState) {
@@ -332,6 +329,9 @@ func TestConsumerAssessNeverStalledWithoutTrustedConnection(t *testing.T) {
 					h := healthyConsumer()
 					h.Consuming, h.CancelledByBroker, h.NotConsumingSince = false, true, ago(2*time.Hour)
 					cs := ClientState{Connected: connected, Reconnecting: reconnecting, Blocked: blocked, ConnectedAt: ago(connAge)}
+					if !connected {
+						cs.GaveUp, cs.GaveUpAt = true, ago(time.Hour) // GaveUp implies disconnected
+					}
 					lvl, reason := h.Assess(cs, ConsumerPolicy{StallAfter: time.Minute}, healthNow)
 					if lvl != HealthStalled {
 						continue
@@ -500,14 +500,31 @@ func TestClientGivesUpAfterMaxReconnectAttempts(t *testing.T) {
 		t.Fatalf("GaveUpAt moved from %v to %v", first, got)
 	}
 
-	late := first.Add(5 * time.Minute)
-	if lvl, reason := (DeliveryHealth{}).Assess(DeliveryHealth{}, c.State(), DeliveryPolicy{}, late); lvl != HealthStalled {
-		t.Fatalf("publisher Assess = %s (%s), want stalled", lvl, reason)
+	// Information only: Degraded however long ago it gave up, never Stalled.
+	for _, age := range []time.Duration{time.Second, 5 * time.Minute, 24 * time.Hour} {
+		late := first.Add(age)
+		if lvl, reason := (DeliveryHealth{}).Assess(DeliveryHealth{}, c.State(), DeliveryPolicy{}, late); lvl != HealthDegraded {
+			t.Fatalf("publisher Assess after %s = %s (%s), want degraded", age, lvl, reason)
+		}
+		if lvl, reason := (ConsumerHealth{}).Assess(c.State(), ConsumerPolicy{}, late); lvl != HealthDegraded {
+			t.Fatalf("consumer Assess after %s = %s (%s), want degraded", age, lvl, reason)
+		}
 	}
-	if lvl, reason := (ConsumerHealth{}).Assess(c.State(), ConsumerPolicy{}, late); lvl != HealthStalled {
-		t.Fatalf("consumer Assess = %s (%s), want stalled", lvl, reason)
+}
+
+// TestGaveUpIsNeverStalled: GaveUp is information, not a verdict. Even with
+// every other Stalled criterion met and an otherwise trusted connection, it must
+// never produce Stalled (a restart does not cure a broker outage, and the
+// monitor keeps retrying), nor open a path round the connection guard.
+func TestGaveUpIsNeverStalled(t *testing.T) {
+	cs := healthyClient()
+	cs.GaveUp, cs.GaveUpAt = true, ago(24*time.Hour)
+	if lvl, reason := wedgedPublisher().Assess(DeliveryHealth{}, cs, DeliveryPolicy{}, healthNow); lvl == HealthStalled {
+		t.Fatalf("publisher Stalled on GaveUp: %s", reason)
 	}
-	if lvl, _ := (ConsumerHealth{}).Assess(c.State(), ConsumerPolicy{}, first.Add(time.Second)); lvl == HealthStalled {
-		t.Fatal("stalled the moment the client gave up")
+	h := healthyConsumer()
+	h.Consuming, h.NotConsumingSince = false, ago(24*time.Hour)
+	if lvl, reason := h.Assess(cs, ConsumerPolicy{}, healthNow); lvl == HealthStalled {
+		t.Fatalf("consumer Stalled on GaveUp: %s", reason)
 	}
 }

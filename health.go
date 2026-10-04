@@ -88,22 +88,22 @@ func latestOf(ts ...time.Time) time.Time {
 	return latest
 }
 
-// gaveUpVerdict is the one Stalled verdict that deliberately bypasses the
-// connection guards. When the operator capped reconnection (MaxReconnectAttempts
-// > 0) and the cap was exhausted, the process is, by its own configuration, not
-// going to recover on its own, and a restart is the cure. Held for minAge so a
-// cap that is hit and immediately recovered from never triggers it.
+// gaveUpVerdict reports a client that exhausted its configured
+// MaxReconnectAttempts as Degraded, and NEVER as Stalled.
 //
-// This trades the restart-storm guard for the cap: a broker outage longer than
-// MaxReconnectAttempts x ReconnectDelay makes every capped client Stalled.
-// Leave MaxReconnectAttempts at 0 (unlimited) if that is not wanted.
-func gaveUpVerdict(cs ClientState, minAge time.Duration, now time.Time) (HealthLevel, string, bool) {
+// GaveUp is not a terminal state: the client's connection monitor re-enters the
+// reconnect loop every second, so a capped client keeps retrying. A restart does
+// not cure a broker outage, and returning Stalled here would restart every capped
+// client in the fleet during any outage longer than MaxReconnectAttempts x
+// ReconnectDelay, which is exactly the storm the connection guard exists to
+// prevent. GaveUp therefore does not bypass connectionTrusted; it is information
+// (ClientState.GaveUp/GaveUpAt) and a Degraded reason. Since GaveUp is cleared by
+// the next successful connect, it implies a disconnected client, for which no
+// Stalled verdict is possible anyway.
+func gaveUpVerdict(cs ClientState, now time.Time) (HealthLevel, string, bool) {
 	if !cs.GaveUp {
 		return HealthOK, "", false
 	}
-	held := now.Sub(cs.GaveUpAt)
-	if held < minAge {
-		return HealthDegraded, fmt.Sprintf("client exhausted its reconnect attempts %s ago (stalled after %s)", held.Round(time.Second), minAge), true
-	}
-	return HealthStalled, fmt.Sprintf("client gave up reconnecting %s ago (MaxReconnectAttempts exhausted, last error %q); a restart is the cure", held.Round(time.Second), cs.LastError), true
+	return HealthDegraded, fmt.Sprintf("reconnect attempts exhausted %s ago (MaxReconnectAttempts reached; still retrying, last error %q)",
+		now.Sub(cs.GaveUpAt).Round(time.Second), cs.LastError), true
 }
