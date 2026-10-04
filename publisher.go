@@ -107,9 +107,12 @@ type pendingMessage struct {
 	inFlight       bool
 	orphanDeferred bool
 	orphanReason   string
-	Exchange       string
-	RoutingKey     string
-	Mandatory      bool
+	// timeoutDeferred: the delivery timeout fired while the send was in flight.
+	// Same single-signal rule as orphans: the publisher decides after the send.
+	timeoutDeferred bool
+	Exchange        string
+	RoutingKey      string
+	Mandatory       bool
 
 	// Automatic retry support (only populated if automatic retries are enabled)
 	OriginalMessage *Message        // Cloned message for retry (nil if retries disabled)
@@ -794,6 +797,13 @@ func (p *Publisher) PublishBatchParallel(ctx context.Context, messages []Publish
 //	        },
 //	    })
 func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, routingKey string, message *Message, options DeliveryOptions) error {
+	return p.publishWithDeliveryAssurance(ctx, exchange, routingKey, message, options, 0)
+}
+
+// publishWithDeliveryAssurance is PublishWithDeliveryAssurance with the number of
+// automatic retries already spent on this message, which a retry republish carries
+// forward so that WithPublisherRetry's attempt limit actually bounds the retries.
+func (p *Publisher) publishWithDeliveryAssurance(ctx context.Context, exchange, routingKey string, message *Message, options DeliveryOptions, retryCount int) error {
 	if !p.deliveryAssuranceEnabled {
 		return fmt.Errorf("delivery assurance is not enabled for this publisher")
 	}
@@ -882,7 +892,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		Exchange:    exchange,
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
-		RetryCount:  0,
+		RetryCount:  retryCount,
 	}
 
 	// If automatic retries are enabled, clone the message and store context for retry
@@ -1044,23 +1054,20 @@ func (p *Publisher) Close() error {
 		// channel close from now on drop their orphans instead of settling them.
 		close(p.shutdownChan)
 
-		// Close the confirm channel(s) and pass through publishMu, all inside one
-		// bounded wait. Closing a channel is an RPC that can itself queue behind a
-		// write that is stuck on the wire; a truly stuck write is only released by
-		// connection teardown or heartbeat timeout, so Close must not depend on
-		// either. The pass through publishMu is a barrier: it makes sure no refresh
-		// is still installing a channel (and starting readers) when we Wait; a
-		// refresh that starts later sees closed and installs nothing.
-		first := p.confirmGen.Load()
+		// Pass through publishMu (a barrier: no refresh is still installing a
+		// channel and starting readers when we Wait, and one that starts later sees
+		// closed and installs nothing), then close the final channel, all inside one
+		// bounded wait. A publish stuck on the wire holds publishMu and is only
+		// released by connection teardown or heartbeat timeout, and closing a channel
+		// is an RPC that can itself queue behind such a write, so Close must not
+		// depend on either: after 5s it proceeds and the goroutine finishes the
+		// close whenever the publish lets go.
 		barrier := make(chan struct{})
 		go func() {
 			defer close(barrier)
-			p.closeConfirmChannel(first)
 			p.publishMu.Lock()
 			p.publishMu.Unlock() //nolint:staticcheck // empty critical section is the barrier
-			if last := p.confirmGen.Load(); last != first {
-				p.closeConfirmChannel(last)
-			}
+			p.closeConfirmChannel(p.confirmGen.Load())
 		}()
 		select {
 		case <-barrier:
@@ -1419,6 +1426,10 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	pending.mu.Lock()
 	pending.inFlight = false
 	deferred, reason := pending.orphanDeferred, pending.orphanReason
+	// A deferred timeout is settled only if nothing else decided the message
+	// meanwhile (a mandatory message already confirmed is finished by its grace
+	// timer, not by a stale timeout).
+	deferredTimeout := pending.timeoutDeferred && !pending.Confirmed && !pending.Nacked && !pending.Returned
 	if err != nil {
 		// One signal only: the caller is told through the returned error, so no
 		// callback may fire for this attempt. Claiming the message here also covers
@@ -1432,7 +1443,10 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 		p.pendingMessages.Delete(messageID, key)
 		pending.TimeoutTimer.Stop()
 
+		// Nothing was sent, so the message was never published: keep
+		// published minus terminal outcomes from drifting.
 		p.statsMutex.Lock()
+		p.stats.TotalPublished--
 		p.stats.PendingMessages = p.pendingMessages.Count()
 		p.statsMutex.Unlock()
 		return gen, err
@@ -1444,6 +1458,11 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 		// through: no confirm will ever come, and failOrphans left the message to
 		// us. Settle it now so it gets its single callback.
 		p.settleOrphan(pending, reason)
+	} else if deferredTimeout {
+		// The send outlived the delivery timeout but went through. Report what is
+		// true: no confirmation within the window, i.e. a timeout (a late confirm
+		// after this finds nothing to act on).
+		p.handleTimeout(key)
 	}
 	if dc != nil && dc.DeliveryTag != tag {
 		// Cannot happen while this publisher is the only user of the channel.
@@ -2061,7 +2080,7 @@ func (p *Publisher) retryMessage(pending *pendingMessage) {
 	if ctx == nil {
 		ctx = context.Background() // Fallback if no context was stored
 	}
-	err := p.PublishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options)
+	err := p.publishWithDeliveryAssurance(ctx, exchange, routingKey, originalMessage, options, retryCount)
 
 	if err != nil {
 		p.client.config.Logger.Error("Failed to re-publish message for retry",
@@ -2161,6 +2180,13 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 
 	// If callback already fired, do nothing
 	if pending.CallbackFired {
+		return
+	}
+	if pending.inFlight {
+		// A send blocked past the delivery timeout. Do not claim the message: if
+		// the send then fails the caller gets an error and no callback, and if it
+		// succeeds publishTracked settles it as a timeout right after.
+		pending.timeoutDeferred = true
 		return
 	}
 
