@@ -44,6 +44,16 @@ type Publisher struct {
 	// Delivery statistics
 	stats      DeliveryStats
 	statsMutex sync.RWMutex
+
+	// Functional-health bookkeeping (see publisher_health.go). The fields
+	// below statsMutex's line are guarded by it; lastPublishNano is atomic so the
+	// publish path adds no lock acquisition for it.
+	startedAt             time.Time
+	lastPublishNano       atomic.Int64
+	lastResponseAt        time.Time // last confirm/nack/return frame read from the broker
+	failuresSinceResponse int64     // timeouts + orphans on the current generation since lastResponseAt
+	lastErr               string
+	lastErrAt             time.Time
 }
 
 // publisherConfig holds publisher-specific configuration
@@ -92,7 +102,8 @@ type pendingMessage struct {
 	// halves, kept separately for logs.
 	key        uint64
 	brokerTag  uint64
-	generation uint64 // confirm channel generation the message was published on
+	generation uint64        // confirm channel generation the message was published on
+	timeout    time.Duration // this message's delivery timeout (health: oldest-pending sanity)
 	Exchange   string
 	RoutingKey string
 	Mandatory  bool
@@ -841,6 +852,7 @@ func (p *Publisher) PublishWithDeliveryAssurance(ctx context.Context, exchange, 
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
 		RetryCount:  0,
+		timeout:     timeout,
 	}
 
 	// If automatic retries are enabled, clone the message and store context for retry
@@ -1197,6 +1209,13 @@ type confirmGeneration struct {
 	// returnsDone is closed when this generation's return reader has exited, so
 	// the confirm reader can settle orphans only after queued returns were handled.
 	returnsDone chan struct{}
+
+	// since is when this generation was installed.
+	since time.Time
+
+	// readers is the number of this generation's readers still running (2 when
+	// healthy). Informational: DeliveryHealth reports whether both are up.
+	readers atomic.Int32
 }
 
 // deliveryTagBits is the part of a pending-map key that holds the broker's
@@ -1248,6 +1267,7 @@ func (p *Publisher) initDeliveryAssurance() error {
 	}
 
 	// Initialize publisher fields
+	p.startedAt = time.Now()
 	p.deliveryAssuranceEnabled = true
 	p.pendingMessages = newShardedPendingMap()
 	p.shutdownChan = make(chan struct{})
@@ -1255,6 +1275,11 @@ func (p *Publisher) initDeliveryAssurance() error {
 	p.publishMu.Lock()
 	p.installConfirmGenerationLocked(confirmCh)
 	p.publishMu.Unlock()
+
+	// The keeper replaces a dead confirm channel without waiting for a publish
+	// to notice. Nothing can call Close yet, so Add cannot race with Wait.
+	p.shutdownWg.Add(1)
+	go p.runConfirmKeeper()
 
 	p.client.config.Logger.Info("Delivery assurance initialized",
 		"connection_name", p.client.config.ConnectionName)
@@ -1270,8 +1295,16 @@ func (p *Publisher) installConfirmGenerationLocked(ch *amqp.Channel) *confirmGen
 	gen := &confirmGeneration{
 		id:          p.genCounter,
 		ch:          ch,
+		since:       time.Now(),
 		returnsDone: make(chan struct{}),
 	}
+	gen.readers.Store(2) // confirm + return reader, started below
+
+	// A new channel starts a fresh failure streak: failures on the old one say
+	// nothing about this one.
+	p.statsMutex.Lock()
+	p.failuresSinceResponse = 0
+	p.statsMutex.Unlock()
 
 	// Register the listeners before the channel is published as current, and hand
 	// the notification channels to the readers as arguments rather than through a
@@ -1383,6 +1416,7 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	}
 
 	gen.published++
+	p.lastPublishNano.Store(time.Now().UnixNano())
 	if dc != nil && dc.DeliveryTag != tag {
 		// Cannot happen while this publisher is the only user of the channel.
 		// Re-key the entry to the tag the channel really used (so its confirm can
@@ -1530,6 +1564,7 @@ func (p *Publisher) refreshChannel() error {
 // connection shutdown) or the publisher is closed.
 func (p *Publisher) runConfirmReader(gen *confirmGeneration, confirms <-chan amqp.Confirmation) {
 	defer p.shutdownWg.Done()
+	defer gen.readers.Add(-1)
 
 	for {
 		select {
@@ -1551,6 +1586,7 @@ func (p *Publisher) runConfirmReader(gen *confirmGeneration, confirms <-chan amq
 // lifecycle as runConfirmReader.
 func (p *Publisher) runReturnReader(gen *confirmGeneration, returns <-chan amqp.Return) {
 	defer p.shutdownWg.Done()
+	defer gen.readers.Add(-1)
 	defer close(gen.returnsDone)
 
 	for {
@@ -1654,6 +1690,7 @@ func (p *Publisher) settleOrphan(pending *pendingMessage, reason string) {
 
 	p.statsMutex.Lock()
 	p.stats.TotalOrphaned++
+	p.noteFailureLocked(pending.generation, errorMessage)
 	p.statsMutex.Unlock()
 
 	p.client.config.Metrics.RecordDeliveryOutcome(DeliveryFailed, time.Since(pending.PublishedAt))
@@ -1684,6 +1721,10 @@ func (p *Publisher) finishAsync(messageID string, key uint64, callback DeliveryC
 
 // handleConfirmation processes a single confirmation
 func (p *Publisher) handleConfirmation(generation uint64, confirmation amqp.Confirmation) {
+	// A confirm frame proves the broker is answering and the reader is alive,
+	// whether or not the message it names is still pending.
+	p.noteResponse()
+
 	// Get the pending message using sharded map. The broker's tag is only
 	// meaningful together with the channel generation it was issued on.
 	pending, exists := p.pendingMessages.LoadByDeliveryTag(deliveryKey(generation, confirmation.DeliveryTag))
@@ -1717,6 +1758,8 @@ func (p *Publisher) handleConfirmation(generation uint64, confirmation amqp.Conf
 
 // handleReturn processes a returned message
 func (p *Publisher) handleReturn(ret amqp.Return) {
+	p.noteResponse()
+
 	// Find the pending message by correlation
 	// Note: Returns don't have delivery tags, so we need to match by message ID
 	messageID := ret.MessageId
@@ -2099,6 +2142,7 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	// Update statistics
 	p.statsMutex.Lock()
 	p.stats.TotalTimedOut++
+	p.noteFailureLocked(pending.generation, pending.FinalError)
 	p.statsMutex.Unlock()
 
 	// Record metrics
