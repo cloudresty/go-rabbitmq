@@ -48,6 +48,25 @@ type Publisher struct {
 	// Delivery statistics
 	stats      DeliveryStats
 	statsMutex sync.RWMutex
+
+	// Functional-health bookkeeping (see publisher_health.go). Times are atomic
+	// monotonic offsets from startedAt (0 = never), so the publish path and the
+	// confirm readers take no lock for them and the values never go backwards with
+	// the wall clock. lastErr/lastErrAt are guarded by statsMutex.
+	startedAt             time.Time
+	lastPublishOff        atomic.Int64
+	lastResponseOff       atomic.Int64 // last confirm/nack/return frame read from the broker
+	failuresSinceResponse atomic.Int64 // timeouts + orphans on the current generation since the last response
+	lastErr               string
+	lastErrAt             time.Time
+
+	// refreshMu serialises confirm-channel refreshes (keeper vs publish path) so
+	// concurrent refreshers of one failed generation do not each open a channel.
+	// Lock order: refreshMu is taken BEFORE publishMu, and never while holding
+	// publishMu, gen.mu or a pending.mu.
+	refreshMu    sync.Mutex
+	refreshOpens atomic.Int64 // channels opened by refreshes (test observability)
+	keeperActive atomic.Bool  // the confirm keeper goroutine is running
 }
 
 // publisherConfig holds publisher-specific configuration
@@ -97,6 +116,9 @@ type pendingMessage struct {
 	key        uint64
 	brokerTag  uint64
 	generation uint64 // confirm channel generation the message was published on
+
+	// timeout is this message's delivery timeout (health: oldest-pending sanity).
+	timeout time.Duration
 
 	// inFlight is true from registration until the basic.publish call has
 	// returned. While it is set, the publisher itself decides the outcome of a
@@ -149,6 +171,7 @@ func (m *pendingMessage) attempt() *pendingMessage {
 		OriginalContext: m.OriginalContext,
 		RetryCount:      m.RetryCount,
 		RetryOptions:    m.RetryOptions,
+		timeout:         m.timeout,
 	}
 }
 
@@ -893,6 +916,7 @@ func (p *Publisher) publishWithDeliveryAssurance(ctx context.Context, exchange, 
 		RoutingKey:  routingKey,
 		Mandatory:   mandatory,
 		RetryCount:  retryCount,
+		timeout:     timeout,
 	}
 
 	// If automatic retries are enabled, clone the message and store context for retry
@@ -1032,6 +1056,13 @@ func (p *Publisher) publishWithDeliveryAssurance(ctx context.Context, exchange, 
 // Close does NOT settle messages still awaiting confirmation: their delivery
 // callbacks are dropped and their timeouts cancelled (a warning with the count is
 // logged). Wait for outstanding callbacks before closing if you need them.
+//
+// The background confirm keeper stops as soon as Close begins and never blocks
+// it: its refreshes are non-blocking (they do not wait for the connection lock a
+// reconnect holds, or for another refresher) and re-check closed before every
+// step. A refresh that is already inside a channel RPC when Close starts can
+// still delay Close, which is why Close keeps its own 5s bounds: during a broker
+// outage Close may take up to that bound, never longer.
 //
 // Close never waits unboundedly behind an in-flight publish: closing the channel
 // and passing through the publisher's internal lock happen in one bounded (5s)
@@ -1250,6 +1281,13 @@ type confirmGeneration struct {
 	// returnsDone is closed when this generation's return reader has exited, so
 	// the confirm reader can settle orphans only after queued returns were handled.
 	returnsDone chan struct{}
+
+	// since is when this generation was installed.
+	since time.Time
+
+	// readers is the number of this generation's readers still running (2 when
+	// healthy). Informational: DeliveryHealth reports whether both are up.
+	readers atomic.Int32
 }
 
 // deliveryTagBits is the part of a pending-map key that holds the broker's
@@ -1301,6 +1339,7 @@ func (p *Publisher) initDeliveryAssurance() error {
 	}
 
 	// Initialize publisher fields
+	p.startedAt = time.Now()
 	p.deliveryAssuranceEnabled = true
 	p.pendingMessages = newShardedPendingMap()
 	p.shutdownChan = make(chan struct{})
@@ -1308,6 +1347,11 @@ func (p *Publisher) initDeliveryAssurance() error {
 	p.publishMu.Lock()
 	p.installConfirmGenerationLocked(confirmCh)
 	p.publishMu.Unlock()
+
+	// The keeper replaces a dead confirm channel without waiting for a publish
+	// to notice. Nothing can call Close yet, so Add cannot race with Wait.
+	p.shutdownWg.Add(1)
+	go p.runConfirmKeeper()
 
 	p.client.config.Logger.Info("Delivery assurance initialized",
 		"connection_name", p.client.config.ConnectionName)
@@ -1323,8 +1367,14 @@ func (p *Publisher) installConfirmGenerationLocked(ch *amqp.Channel) *confirmGen
 	gen := &confirmGeneration{
 		id:          p.genCounter,
 		ch:          ch,
+		since:       time.Now(),
 		returnsDone: make(chan struct{}),
 	}
+	gen.readers.Store(2) // confirm + return reader, started below
+
+	// A new channel starts a fresh failure streak: failures on the old one say
+	// nothing about this one.
+	p.failuresSinceResponse.Store(0)
 
 	// Register the listeners before the channel is published as current, and hand
 	// the notification channels to the readers as arguments rather than through a
@@ -1453,6 +1503,7 @@ func (p *Publisher) publishTracked(ctx context.Context, exchange, routingKey str
 	}
 
 	gen.published++
+	p.lastPublishOff.Store(p.sinceStart())
 	if deferred {
 		// The channel died while the send was in flight but the send itself went
 		// through: no confirm will ever come, and failOrphans left the message to
@@ -1521,6 +1572,41 @@ func (p *Publisher) rekeyPending(pending *pendingMessage, generation, tag uint64
 // concurrent publisher already replaced it; replacing it again would orphan
 // that publisher's channel.
 func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
+	return p.refreshConfirmChannelOpt(failed, false)
+}
+
+// errRefreshBusy means a non-blocking refresh could not start right now (another
+// refresh is in progress, or the client's connection lock is held by a dial).
+var errRefreshBusy = errors.New("confirm channel refresh busy")
+
+// refreshConfirmChannelOpt is refreshConfirmChannel. With nonBlocking it never
+// waits for refreshMu or for the client's connection lock and returns
+// errRefreshBusy instead; the background keeper uses it so that it can never hold
+// Close up behind a reconnect or another refresher.
+func (p *Publisher) refreshConfirmChannelOpt(failed *confirmGeneration, nonBlocking bool) error {
+	if p.closed.Load() {
+		return errPublisherClosed
+	}
+	if p.confirmGen.Load() != failed {
+		return nil
+	}
+
+	// Single-flight: concurrent refreshers of the same failed generation queue
+	// here, and all but the first then see it already replaced and return without
+	// opening a channel of their own.
+	if nonBlocking {
+		if !p.refreshMu.TryLock() {
+			return errRefreshBusy
+		}
+	} else {
+		p.refreshMu.Lock()
+	}
+	refreshHeld := true
+	defer func() {
+		if refreshHeld {
+			p.refreshMu.Unlock()
+		}
+	}()
 	if p.closed.Load() {
 		return errPublisherClosed
 	}
@@ -1532,9 +1618,25 @@ func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
 	// on the client's connection lock, which the reconnect loop holds for the
 	// whole outage; holding publishMu across that wait would stall every publish
 	// and Close for as long as the broker is away.
-	newCh, err := p.client.getChannel()
+	var (
+		newCh *amqp.Channel
+		err   error
+	)
+	if nonBlocking {
+		newCh, err = p.client.tryGetChannel()
+		if errors.Is(err, errConnectionBusy) {
+			return errRefreshBusy
+		}
+	} else {
+		newCh, err = p.client.getChannel()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get new channel: %w", err)
+	}
+	p.refreshOpens.Add(1)
+	if p.closed.Load() {
+		_ = newCh.Close()
+		return errPublisherClosed
 	}
 	if err := newCh.Confirm(false); err != nil {
 		_ = newCh.Close()
@@ -1559,10 +1661,12 @@ func (p *Publisher) refreshConfirmChannel(failed *confirmGeneration) error {
 
 	p.installConfirmGenerationLocked(newCh)
 	p.publishMu.Unlock()
+	p.refreshMu.Unlock()
+	refreshHeld = false
 
 	// The old channel is normally closed already (that is why we are here); if
 	// it is not, close it so its readers exit and its orphans are settled. Done
-	// outside the lock: closing is an RPC.
+	// outside every lock: closing is an RPC.
 	p.closeConfirmChannel(old)
 
 	p.client.config.Logger.Info("Confirm channel refreshed successfully",
@@ -1618,6 +1722,7 @@ func (p *Publisher) refreshChannel() error {
 // connection shutdown) or the publisher is closed.
 func (p *Publisher) runConfirmReader(gen *confirmGeneration, confirms <-chan amqp.Confirmation) {
 	defer p.shutdownWg.Done()
+	defer gen.readers.Add(-1)
 
 	for {
 		select {
@@ -1639,6 +1744,7 @@ func (p *Publisher) runConfirmReader(gen *confirmGeneration, confirms <-chan amq
 // lifecycle as runConfirmReader.
 func (p *Publisher) runReturnReader(gen *confirmGeneration, returns <-chan amqp.Return) {
 	defer p.shutdownWg.Done()
+	defer gen.readers.Add(-1)
 	defer close(gen.returnsDone)
 
 	for {
@@ -1749,6 +1855,7 @@ func (p *Publisher) settleOrphan(pending *pendingMessage, reason string) {
 
 	p.statsMutex.Lock()
 	p.stats.TotalOrphaned++
+	p.noteFailureLocked(pending.generation, errorMessage)
 	p.statsMutex.Unlock()
 
 	p.client.config.Metrics.RecordDeliveryOutcome(DeliveryFailed, time.Since(pending.PublishedAt))
@@ -1779,6 +1886,10 @@ func (p *Publisher) finishAsync(messageID string, key uint64, callback DeliveryC
 
 // handleConfirmation processes a single confirmation
 func (p *Publisher) handleConfirmation(generation uint64, confirmation amqp.Confirmation) {
+	// A confirm frame proves the broker is answering and the reader is alive,
+	// whether or not the message it names is still pending.
+	p.noteResponse()
+
 	// Get the pending message using sharded map. The broker's tag is only
 	// meaningful together with the channel generation it was issued on.
 	pending, exists := p.pendingMessages.LoadByDeliveryTag(deliveryKey(generation, confirmation.DeliveryTag))
@@ -1812,6 +1923,8 @@ func (p *Publisher) handleConfirmation(generation uint64, confirmation amqp.Conf
 
 // handleReturn processes a returned message
 func (p *Publisher) handleReturn(ret amqp.Return) {
+	p.noteResponse()
+
 	// Find the pending message by correlation
 	// Note: Returns don't have delivery tags, so we need to match by message ID
 	messageID := ret.MessageId
@@ -2201,6 +2314,7 @@ func (p *Publisher) handleTimeout(deliveryTag uint64) {
 	// Update statistics
 	p.statsMutex.Lock()
 	p.stats.TotalTimedOut++
+	p.noteFailureLocked(pending.generation, pending.FinalError)
 	p.statsMutex.Unlock()
 
 	// Record metrics
