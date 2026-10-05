@@ -95,7 +95,7 @@ Each sub-package implements core interfaces defined in the root package, enablin
 
 ### Production-Ready Features
 
-- **Functional Health**: In-memory `State()`, `DeliveryHealth()` and `Health()` snapshots with pure `Assess` verdicts (OK / Degraded / Stalled) and a restart-storm guard, so liveness can fail on a real wedge and never on a broker outage; see [Production Features](docs/production-features.md#functional-health)
+- **Functional Health**: In-memory `State()`, `DeliveryHealth()` and `Health()` snapshots with pure `Assess` verdicts (OK / Degraded / Stalled) and a restart-storm guard, so liveness can fail on a real wedge and never on a broker outage or a missing queue or refused permission (404/403/406 on subscribe is Degraded); see [Production Features](docs/production-features.md#functional-health)
 - **Delivery Assurance**: Built-in publisher confirms with asynchronous callbacks for reliable message delivery
 - **Publisher Retry**: Automatic re-publishing of nacked messages with configurable backoff and max attempts
 - **Consumer Retry**: Header-based retry tracking that works across distributed consumers (supports both Quorum and Classic queues)
