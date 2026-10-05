@@ -374,6 +374,8 @@ Alongside the verdicts, a publisher now replaces a dead confirm channel proactiv
 | `HealthDegraded` | Something looks wrong but is not provably a wedge | Readiness detail line, dashboards, alerts; **never** a restart |
 | `HealthOK` | Nothing wrong that these signals can see | - |
 
+**A refused subscription is Degraded, never Stalled.** When the broker refuses the consumer's subscription with AMQP `404 NOT_FOUND` (queue missing, for example a Topology Operator that is late or a deleted queue), `403 ACCESS_REFUSED` (permissions) or `406 PRECONDITION_FAILED` (declared-argument mismatch), `ConsumerHealth.Assess` returns `HealthDegraded` with the reason `queue not found`, `access refused` or `precondition failed`, however long it lasts. Every replica sees the same refusal at the same moment and a restart cannot cure it, so Stalled would restart the whole fleet for a configuration or topology problem. The code is exposed as `ConsumerHealth.LastSubscribeErrorCode` (0 when the latest failure carried no AMQP reply code), and a successful subscribe clears it. Every other way of not consuming keeps its Stalled behaviour.
+
 Evaluate on a background interval (for example every 10s), cache the result, and have the probe handler read the cache. Keep the previous `DeliveryHealth` between evaluations. Hold a Stalled verdict through your own debounce (kubelet `failureThreshold`, plus a per-pod jitter) before it kills anything.
 
 ```go
