@@ -239,7 +239,13 @@ type RejectError struct {
 	Cause   error
 }
 
+// Error returns the cause's message. A RejectError built without a Cause is
+// legal (the requeue decision is the point) and is logged on every reject, so
+// it must never panic: it renders a fixed description instead.
 func (r *RejectError) Error() string {
+	if r.Cause == nil {
+		return fmt.Sprintf("message rejected (requeue=%t)", r.Requeue)
+	}
 	return r.Cause.Error()
 }
 
