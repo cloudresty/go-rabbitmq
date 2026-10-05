@@ -304,12 +304,29 @@ func TestHealth_ConsumerSeesBrokerCancel(t *testing.T) {
 			if lvl, reason := h.Assess(f.client.State(), ConsumerPolicy{}, time.Now()); lvl != HealthDegraded {
 				t.Fatalf("Assess (default policy) = %s (%s), want degraded", lvl, reason)
 			}
-			// Short window: the same fact becomes Stalled once held long enough.
-			pol := ConsumerPolicy{StallAfter: time.Second, MinConnectionAge: time.Millisecond}
-			eventually(t, 10*time.Second, "Assess to escalate to Stalled", func() bool {
-				lvl, _ := consumer.Health().Assess(f.client.State(), pol, time.Now())
-				return lvl == HealthStalled
+			// The resubscribe is refused with 404 NOT_FOUND. A restart cannot
+			// recreate a deleted queue, so however long the refusal is held it
+			// stays Degraded and is never declared Stalled: Stalled maps to a
+			// liveness failure, and every replica would restart at once.
+			eventually(t, 10*time.Second, "a 404 subscribe refusal to be recorded", func() bool {
+				return consumer.Health().LastSubscribeErrorCode == amqpNotFound
 			})
+			pol := ConsumerPolicy{StallAfter: time.Second, MinConnectionAge: time.Millisecond}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				h := consumer.Health()
+				if h.LastSubscribeErrorCode != amqpNotFound {
+					// A dropped connection mid-delete can briefly replace the
+					// refusal with a transport error; wait for the next attempt.
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+				lvl, reason := h.Assess(f.client.State(), pol, time.Now())
+				if lvl != HealthDegraded || !strings.Contains(reason, "queue not found") {
+					t.Fatalf("Assess (deleted queue, short window) = %s (%s), want degraded: queue not found", lvl, reason)
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
 		})
 	}
 }
