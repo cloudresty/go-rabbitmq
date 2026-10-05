@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,45 @@ type ConsumerHealth struct {
 	// LastError is the most recent subscription failure.
 	LastError   string
 	LastErrorAt time.Time
+
+	// LastSubscribeErrorCode is the AMQP reply code (for example 404, 403 or
+	// 406) carried by the most recent failed subscription attempt among the
+	// subscriptions that are still failing, or 0 when that failure carried none
+	// (no channel, connection error) or no subscription is failing. It is
+	// cleared by a successful subscribe, per subscription. Assess treats 403,
+	// 404 and 406 as the broker REFUSING the subscription.
+	LastSubscribeErrorCode int
+}
+
+// AMQP reply codes meaning the broker refused a subscription because of
+// configuration or topology, which a process restart cannot cure.
+const (
+	amqpAccessRefused      = 403 // ACCESS_REFUSED: permissions
+	amqpNotFound           = 404 // NOT_FOUND: the queue does not exist
+	amqpPreconditionFailed = 406 // PRECONDITION_FAILED: declared-argument mismatch
+)
+
+// subscribeRefusal names a refusal reply code, or returns "" for any other.
+func subscribeRefusal(code int) string {
+	switch code {
+	case amqpNotFound:
+		return "queue not found"
+	case amqpAccessRefused:
+		return "access refused"
+	case amqpPreconditionFailed:
+		return "precondition failed"
+	}
+	return ""
+}
+
+// amqpReplyCode extracts the AMQP reply code from err (a Consume failure or a
+// channel-close reason), or 0 if it carries none.
+func amqpReplyCode(err error) int {
+	var ae *amqp.Error
+	if errors.As(err, &ae) && ae != nil {
+		return ae.Code
+	}
+	return 0
 }
 
 // consumerHealth is the mutable state behind Consumer.Health. The zero value is
@@ -110,6 +150,8 @@ type subscriptionState struct {
 	active    bool
 	cancelled bool
 	failures  int // consecutive failed (re)subscription attempts of this subscription
+	errCode   int // AMQP reply code of the latest failure, 0 if none; cleared on success
+	errAt     time.Time
 }
 
 func (h *consumerHealth) sub(id int) *subscriptionState {
@@ -174,6 +216,7 @@ func (h *consumerHealth) subscribed(id int, ch *amqp.Channel) {
 	s := h.sub(id)
 	s.ch, s.active, s.cancelled = ch, true, false
 	s.failures = 0
+	s.errCode, s.errAt = 0, time.Time{}
 	if h.subAt.IsZero() {
 		h.subAt = time.Now()
 	}
@@ -210,7 +253,8 @@ func (h *consumerHealth) failed(id int, err error) {
 	s := h.sub(id)
 	s.active = false
 	s.failures++
-	h.lastErr, h.lastErrT = err.Error(), time.Now()
+	s.errCode, s.errAt = amqpReplyCode(err), time.Now()
+	h.lastErr, h.lastErrT = err.Error(), s.errAt
 	h.refreshSinceLocked()
 }
 
@@ -271,7 +315,11 @@ func (c *Consumer) Health() ConsumerHealth {
 	out.SubscribedAt = h.subAt
 	out.NotConsumingSince = h.since
 	out.LastError, out.LastErrorAt = h.lastErr, h.lastErrT
+	var codeAt time.Time
 	for _, s := range h.subs {
+		if !s.errAt.IsZero() && !s.errAt.Before(codeAt) {
+			codeAt, out.LastSubscribeErrorCode = s.errAt, s.errCode
+		}
 		if s.failures > out.ResubscribeFailures {
 			out.ResubscribeFailures = s.failures
 		}
@@ -335,6 +383,13 @@ func (pol ConsumerPolicy) withDefaults() ConsumerPolicy {
 // LastDeliveryAt is: an idle queue is legitimate. It is reported in the reason of
 // an OK verdict only.
 //
+// A consumer that cannot consume because the broker REFUSES the subscription
+// (AMQP 404 NOT_FOUND "queue not found", 403 ACCESS_REFUSED "access refused",
+// 406 PRECONDITION_FAILED "precondition failed", from
+// ConsumerHealth.LastSubscribeErrorCode) is HealthDegraded however long it has
+// lasted: it is configuration or topology, not a wedge, and a restart cannot
+// cure it. Any other subscribe failure keeps the Stalled behaviour above.
+//
 // A consumer that never started, or whose Consume has returned on a clean stop,
 // is HealthDegraded, never Stalled: the first is a wiring question for readiness,
 // the second an intentional stop. A client that exhausted a configured
@@ -363,6 +418,15 @@ func (h ConsumerHealth) Assess(cs ClientState, pol ConsumerPolicy, now time.Time
 		}
 		return HealthOK, fmt.Sprintf("consuming %q, %d in flight, last delivery %s, last ack %s",
 			h.Queue, h.InFlight, ageString(h.LastDeliveryAt, now), ageString(h.LastAckAt, now))
+	}
+
+	// The broker is refusing the subscription (queue missing, permission
+	// denied, argument mismatch): configuration or topology, not a wedge. Every
+	// replica sees the same refusal at once, so Stalled would restart the whole
+	// fleet into the same refusal.
+	if why := subscribeRefusal(h.LastSubscribeErrorCode); why != "" {
+		return HealthDegraded, fmt.Sprintf("%s (AMQP %d), a restart cannot cure it; not declared stalled: %s",
+			why, h.LastSubscribeErrorCode, detail)
 	}
 
 	held := now.Sub(latestOf(h.NotConsumingSince, cs.ConnectedAt))
