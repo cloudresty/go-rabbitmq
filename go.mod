@@ -1,6 +1,6 @@
 module github.com/cloudresty/go-rabbitmq
 
-go 1.26.0
+go 1.27.2
 
 // v1.11.3 was published missing two commits of the reconnect fix: a narrow
 // window where a retried publish could lose its callback silently, a path that
@@ -8,13 +8,10 @@ go 1.26.0
 // after a nack. Use v1.12.0 or later.
 retract v1.11.3
 
-require github.com/rabbitmq/amqp091-go v1.15.0
-
-require github.com/cloudresty/ulid v1.2.1
-
-require github.com/cloudresty/go-env v1.0.1
-
 require (
+	github.com/cloudresty/go-env v1.0.1
+	github.com/cloudresty/ulid v1.2.1
+	github.com/rabbitmq/amqp091-go v1.15.0
 	github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
