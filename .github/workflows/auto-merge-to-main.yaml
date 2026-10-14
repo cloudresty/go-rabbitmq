@@ -10,10 +10,9 @@ on:
   workflow_dispatch:
 
 # Every credential in this workflow is the built-in GITHUB_TOKEN, scoped here.
-# There is deliberately no PAT fallback. The old
-# `CLOUDRESTY_GITBOT_PAT || GITHUB_TOKEN` expression silently switched
-# credential whenever the PAT was unset, expired or not scoped to this
-# repository; a GITHUB_TOKEN merge then fires no push workflows, so the
+# There is deliberately no PAT fallback. The old `<PAT> || GITHUB_TOKEN`
+# expression silently switched credential whenever the PAT was unset,
+# expired or not scoped to this repository; a GITHUB_TOKEN merge then fires no push workflows, so the
 # release chain stopped without an error anywhere.
 #   contents: write       merge develop into main
 #   pull-requests: write  open / reuse the develop -> main PR

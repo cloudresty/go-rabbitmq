@@ -170,8 +170,8 @@ The automation requires these secrets to be set in your GitHub repository:
 
 #### Required
 
-- **`GITHUB_TOKEN`** - Automatically provided by GitHub Actions
-- **`CLOUDRESTY_GITBOT_PAT`** - Cloudresty GitBot Personal Access Token with `repo` and `workflow` permissions
+- **`GITHUB_TOKEN`** - Automatically provided by GitHub Actions. It is the only credential the pipeline uses; each workflow declares the permissions it needs. No personal access token is required.
+- **Repository setting** - Actions > General > "Allow GitHub Actions to create and approve pull requests" must be enabled, so Auto Merge to Main can open the develop -> main PR.
 
 &nbsp;
 
@@ -344,9 +344,9 @@ gh run view <run-id> --log
 
 ### Common Issues
 
-1. **GitBot PAT Token Permissions**
-   - Ensure the CLOUDRESTY_GITBOT_PAT token has `repo` and `workflow` scopes
-   - Token must not be expired
+1. **Workflow Permissions**
+   - "Allow GitHub Actions to create and approve pull requests" must be enabled in the repository's Actions settings
+   - A merge made with `GITHUB_TOKEN` fires no push workflows, so Auto Merge to Main dispatches Auto Release itself; a release that did not happen shows up as a failed Auto Merge to Main run
 
 2. **Branch Protection Conflicts**
    - Auto-merge requires appropriate permissions
