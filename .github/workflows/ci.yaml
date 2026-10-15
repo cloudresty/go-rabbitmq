@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [ main, develop ]
+  # develop only. The Auto Merge to Main bot opens its develop -> main PR and
+  # merges it within ~5 s of CI having already passed on that exact commit.
+  # A pull_request run queued for a PR that is merged while it starts has no
+  # merge ref to read its workflow from and dies in ~2 s with "This run likely
+  # failed because of a workflow file issue" (0 jobs), a red X on every
+  # release. main still gets CI from the push trigger above.
   pull_request:
-    branches: [ main, develop ]
+    branches: [develop]
   # GITHUB_TOKEN pushes and PRs fire no workflows, so the automation
   # workflows dispatch CI explicitly.
   workflow_dispatch:
