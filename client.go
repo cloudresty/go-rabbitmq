@@ -206,6 +206,9 @@ type clientConfig struct {
 	SagaOrchestrator SagaOrchestrator
 	GracefulShutdown GracefulShutdown
 
+	// ConsumeGuard, when set, is checked in NewConsumer (opt-in; nil by default)
+	ConsumeGuard ConsumeGuard
+
 	// Topology validation
 	TopologyValidation           bool
 	TopologyAutoRecreation       bool
@@ -501,6 +504,11 @@ func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
 	// Apply options (can override ConsumerTag if needed)
 	for _, opt := range opts {
 		opt(config)
+	}
+
+	// Opt-in consume guard
+	if err := c.checkConsumeGuard(); err != nil {
+		return nil, err
 	}
 
 	// Get channel
