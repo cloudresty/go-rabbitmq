@@ -10,11 +10,14 @@ import (
 // ConsumeGuard is an opt-in check run by (*Client).NewConsumer before any
 // channel is opened. It receives the broker hosts the client is configured for
 // and returns a non-nil error to refuse creating consumers. No guard is
-// installed by default; see WithConsumeGuard.
+// installed by default; see WithConsumeGuard. Only NewConsumer is guarded:
+// CreateChannel and the Admin API are not, and publishers are unaffected.
 type ConsumeGuard func(hosts []string) error
 
-// WithConsumeGuard installs a guard checked in (*Client).NewConsumer. Publishers
-// are unaffected. A nil guard (the default) disables the check.
+// WithConsumeGuard installs a guard checked in (*Client).NewConsumer. Only
+// NewConsumer is guarded; CreateChannel and the Admin API are not, and
+// publishers are unaffected. The guard sees the union of URLs, URL and Hosts.
+// A nil guard (the default) disables the check.
 func WithConsumeGuard(g ConsumeGuard) Option {
 	return func(config *clientConfig) error {
 		config.ConsumeGuard = g
@@ -33,21 +36,29 @@ func (c *Client) checkConsumeGuard() error {
 	return nil
 }
 
-// guardHosts returns the configured hosts, falling back to the host part of
-// URLs, then URL, when Hosts is empty.
+// guardHosts returns every broker the client may dial: the union of URLs, URL
+// and Hosts (connect() tries them in that order), de-duplicated. Checking only
+// one of them would let a local Hosts entry hide a shared broker in URL.
 func guardHosts(config *clientConfig) []string {
-	if len(config.Hosts) > 0 {
-		return config.Hosts
-	}
-	urls := config.URLs
-	if len(urls) == 0 && config.URL != "" {
-		urls = []string{config.URL}
-	}
 	var hosts []string
-	for _, raw := range urls {
-		if u, err := url.Parse(raw); err == nil && u.Host != "" {
-			hosts = append(hosts, u.Host)
+	seen := map[string]bool{}
+	add := func(h string) {
+		if h != "" && !seen[h] {
+			seen[h] = true
+			hosts = append(hosts, h)
 		}
+	}
+	urls := append(append([]string{}, config.URLs...), config.URL)
+	for _, raw := range urls {
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil {
+			add(u.Host)
+		}
+	}
+	for _, h := range config.Hosts {
+		add(h)
 	}
 	return hosts
 }
