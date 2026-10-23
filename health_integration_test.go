@@ -257,7 +257,7 @@ func TestHealth_ConsumerSeesBrokerCancel(t *testing.T) {
 					return nil
 				})
 			}()
-			t.Cleanup(func() { cancel(); <-done })
+			t.Cleanup(func() { cancel(); _ = <-done })
 
 			eventually(t, 10*time.Second, "consumer to subscribe", func() bool { return consumer.Health().Consuming })
 			h := consumer.Health()
