@@ -45,6 +45,7 @@ This document provides the complete API reference for the main `go-rabbitmq` pac
 | :--- | :--- |
 | `WithCredentials(username, password string)` | Sets authentication credentials for RabbitMQ connection |
 | `WithHosts(hosts ...string)` | Sets multiple RabbitMQ hosts for failover support |
+| `WithConsumeGuard(g ConsumeGuard)` | Opt-in guard run by `NewConsumer` before any channel is opened; a returned error refuses the consumer (wrapped as `consume guard refused`). Nil by default. Only `NewConsumer` is guarded; `CreateChannel` and the Admin API are not, and publishers are unaffected. `RefuseSharedBrokerOutsideKubernetes(allowEnv)` is a ready-made guard: it refuses non-local brokers outside Kubernetes unless the `allowEnv` variable is `true` |
 | `WithVHost(vhost string)` | Sets the virtual host to connect to |
 | `WithTLS(tlsConfig *tls.Config)` | Sets TLS configuration for secure connections |
 | `WithInsecureTLS()` | Enables TLS with insecure certificate verification |

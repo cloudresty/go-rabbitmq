@@ -206,6 +206,9 @@ type clientConfig struct {
 	SagaOrchestrator SagaOrchestrator
 	GracefulShutdown GracefulShutdown
 
+	// ConsumeGuard, when set, is checked in NewConsumer (opt-in; nil by default)
+	ConsumeGuard ConsumeGuard
+
 	// Topology validation
 	TopologyValidation           bool
 	TopologyAutoRecreation       bool
@@ -289,7 +292,7 @@ func NewClient(opts ...Option) (*Client, error) {
 
 	client.config.Logger.Info("RabbitMQ client created successfully",
 		"connection_name", config.ConnectionName,
-		"url", config.URL,
+		"url", redactURL(config.URL),
 		"vhost", config.VHost)
 
 	return client, nil
@@ -503,6 +506,11 @@ func (c *Client) NewConsumer(opts ...ConsumerOption) (*Consumer, error) {
 		opt(config)
 	}
 
+	// Opt-in consume guard
+	if err := c.checkConsumeGuard(); err != nil {
+		return nil, err
+	}
+
 	// Get channel
 	ch, err := c.getChannel()
 	if err != nil {
@@ -561,7 +569,7 @@ func (c *Client) connect() error {
 
 	c.config.Logger.Info("Establishing RabbitMQ connection",
 		"connection_name", c.config.ConnectionName,
-		"url", c.config.URL,
+		"url", redactURL(c.config.URL),
 		"failover_urls", len(urls))
 
 	start := time.Now()

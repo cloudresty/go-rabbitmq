@@ -96,6 +96,7 @@ Each sub-package implements core interfaces defined in the root package, enablin
 ### Production-Ready Features
 
 - **Functional Health**: In-memory `State()`, `DeliveryHealth()` and `Health()` snapshots with pure `Assess` verdicts (OK / Degraded / Stalled) and a restart-storm guard, so liveness can fail on a real wedge and never on a broker outage or a missing queue or refused permission (404/403/406 on subscribe is Degraded); see [Production Features](docs/production-features.md#functional-health)
+- **Consume Guard (opt-in)**: `WithConsumeGuard(...)` makes `NewConsumer` refuse to start when a guard returns an error; `RefuseSharedBrokerOutsideKubernetes("MY_ALLOW_ENV")` stops a local process from competing with deployed consumers on a shared broker. Only `NewConsumer` is guarded (not `CreateChannel` or the Admin API; publishers are unaffected). Off by default, so behaviour is unchanged unless you opt in
 - **Delivery Assurance**: Built-in publisher confirms with asynchronous callbacks for reliable message delivery
 - **Publisher Retry**: Automatic re-publishing of nacked messages with configurable backoff and max attempts
 - **Consumer Retry**: Header-based retry tracking that works across distributed consumers (supports both Quorum and Classic queues)
